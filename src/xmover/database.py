@@ -107,6 +107,68 @@ class RecoveryInfo:
         return (self.translog_size_bytes / self.size_bytes * 100) if self.size_bytes > 0 else 0
 
 
+@dataclass
+class ActiveShardSnapshot:
+    """Snapshot of active shard checkpoint data for tracking activity"""
+    schema_name: str
+    table_name: str
+    shard_id: int
+    node_name: str
+    is_primary: bool
+    partition_ident: str
+    local_checkpoint: int
+    global_checkpoint: int
+    translog_uncommitted_bytes: int
+    timestamp: float  # Unix timestamp when snapshot was taken
+    
+    @property
+    def checkpoint_delta(self) -> int:
+        """Current checkpoint delta (local - global)"""
+        return self.local_checkpoint - self.global_checkpoint
+    
+    @property
+    def translog_uncommitted_mb(self) -> float:
+        """Translog uncommitted size in MB"""
+        return self.translog_uncommitted_bytes / (1024 * 1024)
+    
+    @property
+    def shard_identifier(self) -> str:
+        """Unique identifier for this shard including partition"""
+        shard_type = "P" if self.is_primary else "R"
+        partition = f":{self.partition_ident}" if self.partition_ident else ""
+        return f"{self.schema_name}.{self.table_name}:{self.shard_id}:{self.node_name}:{shard_type}{partition}"
+
+
+@dataclass
+class ActiveShardActivity:
+    """Activity comparison between two snapshots of the same shard"""
+    schema_name: str
+    table_name: str
+    shard_id: int
+    node_name: str
+    is_primary: bool
+    partition_ident: str
+    local_checkpoint_delta: int  # Change in local checkpoint between snapshots
+    snapshot1: ActiveShardSnapshot
+    snapshot2: ActiveShardSnapshot
+    time_diff_seconds: float
+    
+    @property
+    def activity_rate(self) -> float:
+        """Activity rate as checkpoint changes per second"""
+        if self.time_diff_seconds > 0:
+            return self.local_checkpoint_delta / self.time_diff_seconds
+        return 0.0
+    
+    @property
+    def shard_type(self) -> str:
+        return "PRIMARY" if self.is_primary else "REPLICA"
+    
+    @property
+    def table_identifier(self) -> str:
+        return f"{self.schema_name}.{self.table_name}"
+
+
 class CrateDBClient:
     """Client for connecting to CrateDB and executing queries"""
     
@@ -588,3 +650,64 @@ class CrateDBClient:
         return (recovery_info.stage == 'DONE' and 
                 recovery_info.files_percent >= 100.0 and 
                 recovery_info.bytes_percent >= 100.0)
+    
+    def get_active_shards_snapshot(self, min_checkpoint_delta: int = 1000) -> List[ActiveShardSnapshot]:
+        """Get a snapshot of all started shards for activity monitoring
+        
+        Note: This captures ALL started shards regardless of current activity level.
+        The min_checkpoint_delta parameter is kept for backwards compatibility but
+        filtering is now done during snapshot comparison to catch shards that
+        become active between observations.
+        
+        Args:
+            min_checkpoint_delta: Kept for compatibility - filtering now done in comparison
+            
+        Returns:
+            List of ActiveShardSnapshot objects for all started shards
+        """
+        import time
+        
+        query = """
+        SELECT
+            sh.schema_name,
+            sh.table_name,
+            sh.id AS shard_id,
+            sh."primary",
+            node['name'] as node_name,
+            sh.partition_ident,
+            sh.translog_stats['uncommitted_size'] AS translog_uncommitted_bytes,
+            sh.seq_no_stats['local_checkpoint'] AS local_checkpoint,
+            sh.seq_no_stats['global_checkpoint'] AS global_checkpoint
+        FROM
+            sys.shards AS sh
+        WHERE
+            sh.state = 'STARTED'
+        ORDER BY
+            sh.schema_name, sh.table_name, sh.id, sh.node['name']
+        """
+        
+        try:
+            result = self.execute_query(query)
+            snapshots = []
+            current_time = time.time()
+            
+            for row in result.get('rows', []):
+                snapshot = ActiveShardSnapshot(
+                    schema_name=row[0],
+                    table_name=row[1],
+                    shard_id=row[2],
+                    is_primary=row[3],
+                    node_name=row[4],
+                    partition_ident=row[5] or '',
+                    translog_uncommitted_bytes=row[6] or 0,
+                    local_checkpoint=row[7] or 0,
+                    global_checkpoint=row[8] or 0,
+                    timestamp=current_time
+                )
+                snapshots.append(snapshot)
+                
+            return snapshots
+            
+        except Exception as e:
+            print(f"Error getting active shards snapshot: {e}")
+            return []
