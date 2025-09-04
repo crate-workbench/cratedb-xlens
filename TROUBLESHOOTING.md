@@ -20,6 +20,81 @@ xmover validate-move SCHEMA.TABLE SHARD_ID FROM_NODE TO_NODE
 xmover explain-error "your error message here"
 ```
 
+## Cluster Under Pressure / Performance Issues
+
+### Symptoms
+- `500 Server Error: Internal Server Error`
+- `503 Service Unavailable` 
+- `429 Too Many Requests`
+- Query timeouts
+- Slow response times
+
+### Solutions
+
+#### 1. Configure Retry and Timeout Settings
+Add these to your `.env` file for better resilience:
+
+```bash
+# Increase retries for unstable clusters
+CRATE_MAX_RETRIES=5
+
+# Increase base timeout for slow queries
+CRATE_TIMEOUT=60
+
+# Allow longer timeouts for retries
+CRATE_MAX_TIMEOUT=300
+
+# Adjust backoff between retries
+CRATE_RETRY_BACKOFF=1.5
+```
+
+#### 2. Monitor Cluster Health
+```bash
+# Check cluster load
+SELECT node['name'], load, heap FROM sys.nodes;
+
+# Check query queue
+SELECT * FROM sys.jobs WHERE stmt LIKE '%ALTER TABLE%';
+
+# Check disk usage
+SELECT node['name'], fs['total'], fs['used'] FROM sys.nodes;
+```
+
+#### 3. Reduce Load During Operations
+- Run XMover during low-traffic periods
+- Move fewer shards at once with `--limit`
+- Use `--wait-time` between operations
+- Monitor with `xmover monitor` before proceeding
+
+#### 4. Temporary Cluster Adjustments
+```sql
+-- Increase query timeout temporarily
+SET SESSION "statement_timeout" = '300s';
+
+-- Reduce concurrent recoveries
+SET GLOBAL TRANSIENT cluster.routing.allocation.node_concurrent_recoveries = 1;
+
+-- Increase recovery throttling
+SET GLOBAL TRANSIENT indices.recovery.max_bytes_per_sec = '20mb';
+```
+
+#### 5. Error-Specific Solutions
+
+**500 Internal Server Error:**
+- Usually indicates cluster overload
+- Wait and retry with exponential backoff (built into XMover)
+- Check cluster logs for specific errors
+
+**503 Service Unavailable:**
+- Cluster rejecting new queries
+- Reduce concurrent operations
+- Wait for current operations to complete
+
+**429 Too Many Requests:**
+- Rate limiting active
+- Increase retry delays with higher `CRATE_RETRY_BACKOFF`
+- Reduce operation frequency
+
 ## Common Issues and Solutions
 
 ### 1. Zone Conflicts

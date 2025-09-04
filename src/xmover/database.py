@@ -62,6 +62,7 @@ class RecoveryInfo:
     """Information about an active shard recovery"""
     schema_name: str
     table_name: str
+    partition_values: Optional[str]  # Partition values for partitioned tables
     shard_id: int
     node_name: str
     node_id: str
@@ -76,6 +77,9 @@ class RecoveryInfo:
     size_bytes: int
     source_node_name: Optional[str] = None  # Source node for PEER recoveries
     translog_size_bytes: int = 0  # Translog size in bytes
+    translog_uncommitted_bytes: int = 0  # Translog uncommitted size in bytes
+    max_seq_no: Optional[int] = None  # Sequence number for this shard
+    primary_max_seq_no: Optional[int] = None  # Primary shard's sequence number for replica progress
     
     @property
     def overall_progress(self) -> float:
@@ -102,9 +106,90 @@ class RecoveryInfo:
         return self.translog_size_bytes / (1024**3)
     
     @property
+    def translog_uncommitted_gb(self) -> float:
+        """Translog uncommitted size in GB"""
+        return self.translog_uncommitted_bytes / (1024**3)
+    
+    @property
     def translog_percentage(self) -> float:
         """Translog size as percentage of shard size"""
         return (self.translog_size_bytes / self.size_bytes * 100) if self.size_bytes > 0 else 0
+    
+    @property
+    def translog_uncommitted_percentage(self) -> float:
+        """Translog uncommitted size as percentage of total translog size"""
+        return (self.translog_uncommitted_bytes / self.translog_size_bytes * 100) if self.translog_size_bytes > 0 else 0
+    
+    @property
+    def seq_no_progress(self) -> Optional[float]:
+        """Calculate replica progress based on sequence numbers (for replica shards only)"""
+        if not self.is_primary and self.max_seq_no is not None and self.primary_max_seq_no is not None:
+            if self.primary_max_seq_no == 0:
+                return 100.0  # No operations on primary yet
+            return min((self.max_seq_no / self.primary_max_seq_no * 100.0), 100.0)
+        return None
+
+
+@dataclass
+class ActiveShardSnapshot:
+    """Snapshot of active shard checkpoint data for tracking activity"""
+    schema_name: str
+    table_name: str
+    shard_id: int
+    node_name: str
+    is_primary: bool
+    partition_ident: str
+    local_checkpoint: int
+    global_checkpoint: int
+    translog_uncommitted_bytes: int
+    timestamp: float  # Unix timestamp when snapshot was taken
+    
+    @property
+    def checkpoint_delta(self) -> int:
+        """Current checkpoint delta (local - global)"""
+        return self.local_checkpoint - self.global_checkpoint
+    
+    @property
+    def translog_uncommitted_mb(self) -> float:
+        """Translog uncommitted size in MB"""
+        return self.translog_uncommitted_bytes / (1024 * 1024)
+    
+    @property
+    def shard_identifier(self) -> str:
+        """Unique identifier for this shard including partition"""
+        shard_type = "P" if self.is_primary else "R"
+        partition = f":{self.partition_ident}" if self.partition_ident else ""
+        return f"{self.schema_name}.{self.table_name}:{self.shard_id}:{self.node_name}:{shard_type}{partition}"
+
+
+@dataclass
+class ActiveShardActivity:
+    """Activity comparison between two snapshots of the same shard"""
+    schema_name: str
+    table_name: str
+    shard_id: int
+    node_name: str
+    is_primary: bool
+    partition_ident: str
+    local_checkpoint_delta: int  # Change in local checkpoint between snapshots
+    snapshot1: ActiveShardSnapshot
+    snapshot2: ActiveShardSnapshot
+    time_diff_seconds: float
+    
+    @property
+    def activity_rate(self) -> float:
+        """Activity rate as checkpoint changes per second"""
+        if self.time_diff_seconds > 0:
+            return self.local_checkpoint_delta / self.time_diff_seconds
+        return 0.0
+    
+    @property
+    def shard_type(self) -> str:
+        return "PRIMARY" if self.is_primary else "REPLICA"
+    
+    @property
+    def table_identifier(self) -> str:
+        return f"{self.schema_name}.{self.table_name}"
 
 
 class CrateDBClient:
@@ -119,7 +204,20 @@ class CrateDBClient:
         
         self.username = os.getenv('CRATE_USERNAME')
         self.password = os.getenv('CRATE_PASSWORD')
-        self.ssl_verify = os.getenv('CRATE_SSL_VERIFY', 'true').lower() == 'true'
+        
+        # Auto-disable SSL verification for localhost connections
+        is_localhost = 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string
+        ssl_verify_env = os.getenv('CRATE_SSL_VERIFY', 'true').lower()
+        
+        # Default to false for localhost, true for remote connections
+        if ssl_verify_env == 'auto':
+            self.ssl_verify = not is_localhost
+        else:
+            self.ssl_verify = ssl_verify_env == 'true'
+        
+        # For localhost, disable SSL verification by default unless explicitly enabled
+        if is_localhost and ssl_verify_env == 'true' and os.getenv('CRATE_SSL_VERIFY') is None:
+            self.ssl_verify = False
         
         # Suppress SSL warnings when SSL verification is disabled
         if not self.ssl_verify:
@@ -139,9 +237,14 @@ class CrateDBClient:
         if parameters:
             payload['args'] = parameters
         
+        # Handle authentication - only use auth if both username and password are provided
+        # For CrateDB, username without password should not use auth
         auth = None
         if self.username and self.password:
             auth = (self.username, self.password)
+        elif self.username and not self.password:
+            # For CrateDB 'crate' user without password, don't use auth
+            auth = None
         
         try:
             response = requests.post(
@@ -153,6 +256,15 @@ class CrateDBClient:
             )
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.SSLError as e:
+            # Provide helpful SSL error message for localhost connections
+            if 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string:
+                raise Exception(f"SSL certificate error for localhost connection. "
+                              f"Try setting CRATE_SSL_VERIFY=false in your .env file. Error: {e}")
+            else:
+                raise Exception(f"SSL error: {e}")
+        except requests.exceptions.ConnectionError as e:
+            raise Exception(f"Connection error - check if CrateDB is running and accessible: {e}")
         except requests.exceptions.RequestException as e:
             raise Exception(f"Failed to execute query: {e}")
     
@@ -344,7 +456,9 @@ class CrateDBClient:
         try:
             result = self.execute_query("SELECT 1")
             return result.get('rowcount', 0) >= 0
-        except Exception:
+        except Exception as e:
+            # Log the actual error for debugging
+            print(f"Connection test failed: {e}")
             return False
     
     def get_cluster_watermarks(self) -> Dict[str, Any]:
@@ -420,6 +534,7 @@ class CrateDBClient:
         SELECT 
             s.table_name,
             s.schema_name,
+            translate(p.values::text, ':{}', '=()') as partition_values,
             s.id as shard_id,
             s.node['name'] as node_name,
             s.node['id'] as node_id,
@@ -428,8 +543,14 @@ class CrateDBClient:
             s.recovery,
             s.size,
             s."primary",
-            s.translog_stats['size'] as translog_size
+            s.translog_stats['size'] as translog_size,
+            s.translog_stats['uncommitted_size'] as translog_uncommitted_size,
+            s.seq_no_stats['max_seq_no'] as max_seq_no
         FROM sys.shards s
+        LEFT JOIN information_schema.table_partitions p 
+            ON s.table_name = p.table_name 
+            AND s.schema_name = p.table_schema 
+            AND s.partition_ident = p.partition_ident
         WHERE s.table_name = ? AND s.id = ?
         AND (s.state = 'RECOVERING' OR s.routing_state IN ('INITIALIZING', 'RELOCATING'))
         ORDER BY s.schema_name
@@ -445,16 +566,41 @@ class CrateDBClient:
         return {
             'table_name': row[0],
             'schema_name': row[1],
-            'shard_id': row[2],
-            'node_name': row[3],
-            'node_id': row[4],
-            'routing_state': row[5],
-            'state': row[6],
-            'recovery': row[7],
-            'size': row[8],
-            'primary': row[9],
-            'translog_size': row[10] or 0
+            'partition_values': row[2],
+            'shard_id': row[3],
+            'node_name': row[4],
+            'node_id': row[5],
+            'routing_state': row[6],
+            'state': row[7],
+            'recovery': row[8],
+            'size': row[9],
+            'primary': row[10],
+            'translog_size': row[11] or 0,
+            'translog_uncommitted_size': row[12] or 0,
+            'max_seq_no': row[13]
         }
+    
+    def _get_primary_max_seq_no(self, schema_name: str, table_name: str, shard_id: int) -> Optional[int]:
+        """Get the max_seq_no of the primary shard for replica progress comparison"""
+        try:
+            query = """
+            SELECT s.seq_no_stats['max_seq_no'] as primary_max_seq_no
+            FROM sys.shards s
+            WHERE s.schema_name = ? AND s.table_name = ? AND s.id = ? 
+            AND s."primary" = true
+            AND s.state = 'STARTED'
+            LIMIT 1
+            """
+            
+            result = self.execute_query(query, [schema_name, table_name, shard_id])
+            
+            if result.get('rows'):
+                return result['rows'][0][0]
+            return None
+            
+        except Exception:
+            # If query fails, return None
+            return None
     
     def get_all_recovering_shards(self, table_name: Optional[str] = None, 
                                 node_name: Optional[str] = None,
@@ -481,6 +627,37 @@ class CrateDBClient:
                 # Update allocation with actual schema from sys.shards
                 allocation['schema_name'] = recovery_detail['schema_name']
                 recovery_info = self._parse_recovery_info(allocation, recovery_detail)
+                
+                # For replica recoveries, get primary sequence number for progress tracking
+                if not recovery_info.is_primary and recovery_info.recovery_type == 'PEER':
+                    primary_seq_no = self._get_primary_max_seq_no(
+                        recovery_detail['schema_name'],
+                        recovery_detail['table_name'],
+                        recovery_detail['shard_id']
+                    )
+                    # Create updated recovery info with primary sequence number
+                    recovery_info = RecoveryInfo(
+                        schema_name=recovery_info.schema_name,
+                        table_name=recovery_info.table_name,
+                        partition_values=recovery_info.partition_values,
+                        shard_id=recovery_info.shard_id,
+                        node_name=recovery_info.node_name,
+                        node_id=recovery_info.node_id,
+                        recovery_type=recovery_info.recovery_type,
+                        stage=recovery_info.stage,
+                        files_percent=recovery_info.files_percent,
+                        bytes_percent=recovery_info.bytes_percent,
+                        total_time_ms=recovery_info.total_time_ms,
+                        routing_state=recovery_info.routing_state,
+                        current_state=recovery_info.current_state,
+                        is_primary=recovery_info.is_primary,
+                        size_bytes=recovery_info.size_bytes,
+                        source_node_name=recovery_info.source_node_name,
+                        translog_size_bytes=recovery_info.translog_size_bytes,
+                        translog_uncommitted_bytes=recovery_info.translog_uncommitted_bytes,
+                        max_seq_no=recovery_info.max_seq_no,
+                        primary_max_seq_no=primary_seq_no
+                    )
                 
                 # Filter out completed recoveries unless include_transitioning is True
                 if include_transitioning or not self._is_recovery_completed(recovery_info):
@@ -529,6 +706,7 @@ class CrateDBClient:
         return RecoveryInfo(
             schema_name=shard_detail['schema_name'],
             table_name=shard_detail['table_name'],
+            partition_values=shard_detail.get('partition_values'),
             shard_id=shard_detail['shard_id'],
             node_name=shard_detail['node_name'],
             node_id=shard_detail['node_id'],
@@ -542,7 +720,10 @@ class CrateDBClient:
             is_primary=shard_detail['primary'],
             size_bytes=shard_detail.get('size', 0),
             source_node_name=source_node,
-            translog_size_bytes=shard_detail.get('translog_size', 0)
+            translog_size_bytes=shard_detail.get('translog_size', 0),
+            translog_uncommitted_bytes=shard_detail.get('translog_uncommitted_size', 0),
+            max_seq_no=shard_detail.get('max_seq_no'),
+            primary_max_seq_no=None  # Will be populated later for replicas
         )
     
     def _find_source_node_for_recovery(self, schema_name: str, table_name: str, shard_id: int, target_node_id: str) -> Optional[str]:
@@ -588,3 +769,119 @@ class CrateDBClient:
         return (recovery_info.stage == 'DONE' and 
                 recovery_info.files_percent >= 100.0 and 
                 recovery_info.bytes_percent >= 100.0)
+
+    def get_problematic_shards(self, table_name: Optional[str] = None, 
+                             node_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get shards that need attention but aren't actively recovering"""
+        
+        where_conditions = ["s.state != 'STARTED'"]
+        parameters = []
+        
+        if table_name:
+            where_conditions.append("s.table_name = ?")
+            parameters.append(table_name)
+            
+        if node_name:
+            where_conditions.append("s.node['name'] = ?")
+            parameters.append(node_name)
+        
+        where_clause = f"WHERE {' AND '.join(where_conditions)}"
+        
+        query = f"""
+        SELECT 
+            s.schema_name, 
+            s.table_name, 
+            translate(p.values::text, ':{{}}', '=()') as partition_values,
+            s.id as shard_id,
+            s.state, 
+            s.routing_state, 
+            s.node['name'] as node_name,
+            s.node['id'] as node_id,
+            s."primary"
+        FROM sys.shards s
+        LEFT JOIN information_schema.table_partitions p 
+            ON s.table_name = p.table_name 
+            AND s.schema_name = p.table_schema 
+            AND s.partition_ident = p.partition_ident
+        {where_clause}
+        ORDER BY s.state, s.table_name, s.id
+        """
+        
+        result = self.execute_query(query, parameters)
+        
+        problematic_shards = []
+        for row in result.get('rows', []):
+            problematic_shards.append({
+                'schema_name': row[0] or 'doc',
+                'table_name': row[1], 
+                'partition_values': row[2],
+                'shard_id': row[3],
+                'state': row[4],
+                'routing_state': row[5],
+                'node_name': row[6],
+                'node_id': row[7],
+                'primary': row[8]
+            })
+        
+        return problematic_shards
+    
+    def get_active_shards_snapshot(self, min_checkpoint_delta: int = 1000) -> List[ActiveShardSnapshot]:
+        """Get a snapshot of all started shards for activity monitoring
+        
+        Note: This captures ALL started shards regardless of current activity level.
+        The min_checkpoint_delta parameter is kept for backwards compatibility but
+        filtering is now done during snapshot comparison to catch shards that
+        become active between observations.
+        
+        Args:
+            min_checkpoint_delta: Kept for compatibility - filtering now done in comparison
+            
+        Returns:
+            List of ActiveShardSnapshot objects for all started shards
+        """
+        import time
+        
+        query = """
+        SELECT
+            sh.schema_name,
+            sh.table_name,
+            sh.id AS shard_id,
+            sh."primary",
+            node['name'] as node_name,
+            sh.partition_ident,
+            sh.translog_stats['uncommitted_size'] AS translog_uncommitted_bytes,
+            sh.seq_no_stats['local_checkpoint'] AS local_checkpoint,
+            sh.seq_no_stats['global_checkpoint'] AS global_checkpoint
+        FROM
+            sys.shards AS sh
+        WHERE
+            sh.state = 'STARTED'
+        ORDER BY
+            sh.schema_name, sh.table_name, sh.id, sh.node['name']
+        """
+        
+        try:
+            result = self.execute_query(query)
+            snapshots = []
+            current_time = time.time()
+            
+            for row in result.get('rows', []):
+                snapshot = ActiveShardSnapshot(
+                    schema_name=row[0],
+                    table_name=row[1],
+                    shard_id=row[2],
+                    is_primary=row[3],
+                    node_name=row[4],
+                    partition_ident=row[5] or '',
+                    translog_uncommitted_bytes=row[6] or 0,
+                    local_checkpoint=row[7] or 0,
+                    global_checkpoint=row[8] or 0,
+                    timestamp=current_time
+                )
+                snapshots.append(snapshot)
+                
+            return snapshots
+            
+        except Exception as e:
+            print(f"Error getting active shards snapshot: {e}")
+            return []
