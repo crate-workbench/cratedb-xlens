@@ -51,7 +51,7 @@ class TestDistributionAnalyzer:
             ['custom', 'another_table', 'node2', 2, 3, 5, 45.8, 35.1, 10.7, 480000],
         ]
         
-        self.mock_client.execute_query.return_value = mock_results
+        self.mock_client.execute_query.return_value = {'rows': mock_results}
         
         distributions = self.analyzer.get_largest_tables_distribution(top_n=10)
         
@@ -153,9 +153,13 @@ class TestDistributionAnalyzer:
         """Test node coverage issue detection"""
         
         # Mock nodes_info to simulate cluster with 4 nodes
+        class MockNode:
+            def __init__(self, name):
+                self.name = name
+        
         mock_nodes = [
-            Mock(name='node1'), Mock(name='node2'), 
-            Mock(name='node3'), Mock(name='node4')
+            MockNode('node1'), MockNode('node2'), 
+            MockNode('node3'), MockNode('node4')
         ]
         self.mock_client.get_nodes_info.return_value = mock_nodes
         

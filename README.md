@@ -31,6 +31,16 @@ pip install -e .
 ```
 
 3. Create a `.env` file with your CrateDB connection details:
+
+**For localhost CrateDB:**
+```bash
+CRATE_CONNECTION_STRING=https://localhost:4200
+CRATE_USERNAME=crate
+# CRATE_PASSWORD=  # Leave empty or unset for default crate user
+CRATE_SSL_VERIFY=false
+```
+
+**For remote CrateDB:**
 ```bash
 CRATE_CONNECTION_STRING=https://your-cluster.cratedb.net:4200
 CRATE_USERNAME=your-username
@@ -41,6 +51,12 @@ CRATE_SSL_VERIFY=true
 ## Quick Start
 
 ### Test Connection
+You can test your connection configuration with the included test script:
+```bash
+python test_connection.py
+```
+
+Or use the built-in test:
 ```bash
 xmover test-connection
 ```
@@ -112,10 +128,61 @@ Analyzes current shard distribution across nodes and zones.
 
 **Options:**
 - `--table, -t`: Analyze specific table only
+- `--largest INTEGER`: Show N largest tables/partitions by size
+- `--smallest INTEGER`: Show N smallest tables/partitions by size
+- `--no-zero-size`: Exclude zero-sized tables from smallest results (default: include zeros)
 
-**Example:**
+**Examples:**
 ```bash
+# Basic cluster analysis
+xmover analyze
+
+# Analyze specific table only
 xmover analyze --table events
+
+# Show top 10 largest tables/partitions
+xmover analyze --largest 10
+
+# Show top 5 smallest tables/partitions (includes zero-sized)
+xmover analyze --smallest 5
+
+# Show top 5 smallest non-zero tables/partitions (exclude zero-sized)
+xmover analyze --smallest 5 --no-zero-size
+
+# Combine options
+xmover analyze --table events --largest 3
+```
+
+**Sample Output (--largest 3):**
+```
+                        Largest Tables/Partitions by Size (Top 3)
+╭─────────────────────────────────┬─────────────────────────────┬────────┬───────┬──────────┬──────────┬──────────┬────────────╮
+│ Table                           │ Partition                   │ Shards │  P/R  │ Min Size │ Avg Size │ Max Size │ Total Size │
+├─────────────────────────────────┼─────────────────────────────┼────────┼───────┼──────────┼──────────┼──────────┼────────────┤
+│ TURVO.shipmentFormFieldData     │ ("id_ts_month"=162777600000 │      4 │ 2P/2R │   89.1GB │   95.3GB │  104.2GB │    381.2GB │
+│ TURVO.orderFormFieldData        │ N/A                         │      6 │ 3P/3R │   23.4GB │   28.7GB │   35.1GB │    172.2GB │
+│ TURVO.documentUploadProgress    │ ("sync_day"=1635724800000)  │      8 │ 4P/4R │   15.2GB │   18.4GB │   22.1GB │    147.2GB │
+╰─────────────────────────────────┴─────────────────────────────┴────────┴───────┴──────────┴──────────┴──────────┴────────────╯
+
+📊 Summary: 18 total shards using 700.6GB across 3 largest table/partition(s)
+```
+
+**Sample Output (--smallest 5 --no-zero-size):**
+```
+ℹ️  Found 12 table/partition(s) with 0.0GB size (excluded from results)
+
+                        Smallest Tables/Partitions by Size (Top 5)
+╭─────────────────────────────────┬─────────────────────────────┬────────┬───────┬──────────┬──────────┬──────────┬────────────╮
+│ Table                           │ Partition                   │ Shards │  P/R  │ Min Size │ Avg Size │ Max Size │ Total Size │
+├─────────────────────────────────┼─────────────────────────────┼────────┼───────┼──────────┼──────────┼──────────┼────────────┤
+│ TURVO.emailActivity_transformf… │ N/A                         │      2 │ 1P/1R │    0.001GB │   0.001GB │    0.002GB │      0.002GB │
+│ TURVO.calendarFormFieldData_tr… │ ("sync_day"=1627776000000)  │      2 │ 1P/1R │    0.005GB │   0.005GB │    0.005GB │      0.010GB │
+│ TURVO.shipmentSummary_failures  │ N/A                         │      2 │ 1P/1R │    0.100GB │   0.100GB │    0.100GB │      0.200GB │
+│ TURVO.documentActivity_failures │ N/A                         │      4 │ 2P/2R │    0.250GB │   0.325GB │    0.400GB │      1.300GB │
+│ TURVO.userActivity_logs         │ ("date"=2024-01-01)         │      6 │ 3P/3R │    0.800GB │   0.950GB │    1.100GB │      5.700GB │
+╰─────────────────────────────────┴─────────────────────────────┴────────┴───────┴──────────┴──────────┴──────────┴────────────╯
+
+📊 Summary: 16 total shards using 7.212GB across 5 smallest non-zero table/partition(s)
 ```
 
 ### `find-candidates`
@@ -262,6 +329,122 @@ xmover monitor-recovery --watch --include-transitioning
 - **PEER**: Copying shard data from another node (replication/relocation)
 - **DISK**: Rebuilding shard from local data (after restart/disk issues)
 
+**Enhanced Translog Monitoring:**
+The recovery monitor now displays detailed translog information in the format:
+```
+📋 TURVO.shipmentFormFieldData_events S4 PEER TRANSLOG 0.0% 6.2GB (TL:109.8GB / 22.1GB / 20%) data-hot-0 → data-hot-7
+```
+
+**Translog Display Format**: `TL:X.XGB / Y.YGB / ZZ%`
+- `X.XGB`: Total translog file size (`translog_stats['size']`)
+- `Y.YGB`: Uncommitted translog size (`translog_stats['uncommitted_size']`)
+- `ZZ%`: Uncommitted as percentage of total translog size
+
+**Color Coding:**
+- 🔴 **Red**: Uncommitted ≥ 5GB OR uncommitted ≥ 80% (critical)
+- 🟡 **Yellow**: Uncommitted ≥ 1GB OR uncommitted ≥ 50% (warning) 
+- 🟢 **Green**: Below warning thresholds (normal)
+
+Translog information is only shown when significant (uncommitted ≥ 10MB or total ≥ 50MB).
+
+**Enhanced Replica Progress Tracking:**
+For replica shard recoveries, the monitor now shows sequence number-based progress when available:
+```
+📋 TURVO.LINEAGE_DIRECTLY_OPEN_TO_APPOINTMENT S2R PEER TRANSLOG 99.9% (seq) 15.2GB data-hot-0 → data-hot-1
+```
+
+**Progress Display Formats:**
+- `99.9% (seq)`: Replica progress based on sequence number comparison with primary
+- `37.5% (seq) / 95.0% (rec)`: Shows both when sequence and traditional progress differ significantly (>5%)
+- `98.5%`: Primary shards or when sequence data unavailable (traditional progress)
+
+**Sequence Progress Benefits:**
+- More accurate progress indication for replica synchronization
+- Based on comparing `max_seq_no` between replica and primary shards
+- Reveals actual replication lag in terms of operations behind primary
+- Particularly useful for detecting stuck replica recoveries where traditional recovery shows 100% but replica is still far behind
+
+**Enhanced Transitioning Recovery Display:**
+The monitor now shows detailed information for transitioning recoveries instead of just "(transitioning)":
+```
+16:08:20 | 5 done (transitioning)
+         | 🔄 TURVO.accountFormFieldData S7R PEER DONE 99.8% (seq) 3.8GB data-hot-5 → data-hot-7
+         | 🔄 TURVO_MySQL.composite_mapping S11P PEER DONE 100.0% 3.0GB data-hot-5 → data-hot-6
+         | 🔄 TURVO.shipmentFormFieldData ("id_ts_month"=1633046400000) S6R PEER DONE 99.8% (seq) 8.2GB (TL:233MB / 49MB / 21%) data-hot-4 → data-hot-7
+```
+
+**Transitioning Display Features:**
+- Shows up to 5 transitioning recoveries with full details
+- Includes sequence progress, translog info, and node routing
+- Throttled to every 30 seconds to reduce noise
+- Uses 🔄 icon to indicate transitioning state
+- Distinguishes primary (P) vs replica (R) shards
+
+### `problematic-translogs`
+Find tables with problematic translog sizes and generate replica management commands.
+
+**Options:**
+- `--sizeMB INTEGER`: Minimum translog uncommitted size in MB (default: 300)
+- `--execute`: Execute the replica management commands after confirmation
+
+**Description:**
+This command identifies tables with replica shards that have large uncommitted translog sizes indicating replication issues. It shows both individual problematic shards and a summary by table/partition. It generates two types of ALTER commands: individual REROUTE CANCEL SHARD commands for each problematic shard, and replica management commands that temporarily set replicas to 0 and restore them to force recreation of problematic replicas.
+
+**Examples:**
+```bash
+# Show problematic tables with translog > 300MB (default)
+xmover problematic-translogs
+
+# Show tables with translog > 500MB
+xmover problematic-translogs --sizeMB 500
+
+# Execute replica management commands for tables > 1GB after confirmation
+xmover problematic-translogs --sizeMB 1000 --execute
+```
+
+**Sample Output:**
+```
+                   Problematic Replica Shards (translog > 300MB)
+╭────────┬───────────────────────────────┬────────────────────────────┬──────────┬────────────┬─────────────╮
+│ Schema │ Table                         │ Partition                  │ Shard ID │ Node       │ Translog MB │
+├────────┼───────────────────────────────┼────────────────────────────┼──────────┼────────────┼─────────────┤
+│ TURVO  │ shipmentFormFieldData         │ none                       │       14 │ data-hot-6 │      7040.9 │
+│ TURVO  │ shipmentFormFieldData_events  │ ("sync_day"=1757376000000) │        3 │ data-hot-2 │       481.2 │
+│ TURVO  │ orderFormFieldData            │ none                       │        5 │ data-hot-1 │       469.5 │
+╰────────┴───────────────────────────────┴────────────────────────────┴──────────┴────────────┴─────────────╯
+
+Found 2 table/partition(s) with problematic translogs:
+
+              Tables with Problematic Replicas (translog > 300MB)               
+╭────────┬───────────┬───────────┬───────────┬──────────┬─────────────┬──────────────┬──────────╮
+│ Schema │ Table     │ Partition │ Problema… │ Max      │ Shards      │ Size GB      │ Current  │
+│        │           │           │ Replicas  │ Trans.MB │ (P/R)       │ (P/R)        │ Replicas │
+├────────┼───────────┼───────────┼───────────┼──────────┼─────────────┼──────────────┼──────────┤
+│ TURVO  │ shipment… │ ("sync..  │         2 │   7011.8 │ 5P/5R       │ 12.4/12.1    │        1 │
+│ TURVO  │ orderFor… │ none      │         1 │    469.5 │ 3P/6R       │ 8.2/16.3     │        2 │
+╰────────┴───────────┴───────────┴───────────┴──────────┴─────────────┴──────────────┴──────────╯
+
+Generated ALTER Commands:
+
+ALTER TABLE "TURVO"."shipmentFormFieldData" REROUTE CANCEL SHARD 14 on 'data-hot-6' WITH (allow_primary=False);
+ALTER TABLE "TURVO"."shipmentFormFieldData_events" partition ("sync_day"=1757376000000) REROUTE CANCEL SHARD 3 on 'data-hot-2' WITH (allow_primary=False);
+ALTER TABLE "TURVO"."orderFormFieldData" REROUTE CANCEL SHARD 5 on 'data-hot-1' WITH (allow_primary=False);
+
+-- Set replicas to 0:
+ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 0);
+-- Restore replicas to 1:
+ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 1);
+
+-- Set replicas to 0:
+ALTER TABLE "TURVO"."orderFormFieldData" SET ("number_of_replicas" = 0);
+-- Restore replicas to 2:
+ALTER TABLE "TURVO"."orderFormFieldData" SET ("number_of_replicas" = 2);
+
+Total: 3 REROUTE CANCEL commands + 4 replica management commands
+```
+
+When using `--execute`, each command is presented individually for confirmation, allowing you to selectively execute specific commands as needed.
+
 ### `active-shards`
 Monitors the most active shards by tracking checkpoint progression over time.
 
@@ -359,6 +542,60 @@ Total checkpoint activity: 190,314 changes, Average rate: 2,109.0/sec
    3    | doc.user_actions       | 1     | 04732dpk70rj6d | data-hot-2 | P    | 30,733       | 1,024.4  | 🔥 HOT
 
 ━━━ Next update in 30s ━━━
+```
+
+### `large-translogs`
+Monitors shards with large translog uncommitted sizes that do not flush properly, displaying both primary and replica shards.
+
+**Options:**
+- `--translogsize`: Minimum translog uncommitted size threshold in MB (default: 500)
+- `--interval`: Monitoring interval in seconds for watch mode (default: 60)
+- `--watch, -w`: Continuously monitor (refresh every interval)
+- `--table, -t`: Monitor specific table only
+- `--node, -n`: Monitor specific node only
+- `--count`: Maximum number of shards with large translogs to show (default: 50)
+
+**Examples:**
+```bash
+# Show shards with translog over default 500MB threshold
+xmover large-translogs
+
+# Show shards with translog over 1GB threshold
+xmover large-translogs --translogsize 1000
+
+# Continuous monitoring every 30 seconds
+xmover large-translogs --watch --interval 30
+
+# Monitor specific table
+xmover large-translogs --table my_table --watch
+
+# Monitor specific node, show top 20
+xmover large-translogs --node data-hot-1 --count 20
+```
+
+This command helps identify shards that are not flushing properly by monitoring their translog uncommitted sizes, which can indicate replication or flush issues.
+
+**Output includes:**
+- **Schema.Table**: Combined schema and table name
+- **Partition**: Partition values or "-" for non-partitioned tables
+- **Shard**: Numeric shard identifier
+- **Node**: Node where shard is located
+- **TL MB**: Translog uncommitted size (color-coded: bright_red >1GB, red >500MB, yellow >100MB, green ≤100MB)
+- **Type**: "P" for primary shards, "R" for replica shards
+- **Timestamp**: Current time for each update
+- **Summary**: Total shards, primary/replica breakdown, average translog size
+
+**Sample output:**
+```
+Large Translogs (>400MB) - 09:45:51
+╭────────────────────────────┬──────────────────────┬───────┬────────────┬────────┬──────╮
+│ Schema.Table               │ Partition            │ Shard │ Node       │  TL MB │ Type │
+├────────────────────────────┼──────────────────────┼───────┼────────────┼────────┼──────┤
+│ TURVO.orderFormFieldData_… │ ("sync_day"=175936.… │     7 │ data-hot-7 │    510 │  P   │
+│ TURVO.orderFormFieldData   │ -                    │     8 │ data-hot-6 │    509 │  R   │
+│ TURVO.orderFormFieldData   │ -                    │    20 │ data-hot-3 │    507 │  R   │
+╰────────────────────────────┴──────────────────────┴───────┴────────────┴────────┴──────╯
+3 shards (1P/2R) - Avg translog: 509MB
 ```
 
 ### `test-connection`
@@ -527,8 +764,20 @@ xmover recommend --prioritize-zones --execute
 
 - `CRATE_CONNECTION_STRING`: CrateDB HTTP endpoint (required)
 - `CRATE_USERNAME`: Username for authentication (optional)
-- `CRATE_PASSWORD`: Password for authentication (optional)
-- `CRATE_SSL_VERIFY`: Enable SSL certificate verification (default: true)
+- `CRATE_PASSWORD`: Password for authentication (optional, only used if username is also provided)
+- `CRATE_SSL_VERIFY`: SSL certificate verification (default: auto-detects based on connection string)
+  - `true`: Always verify SSL certificates
+  - `false`: Disable SSL certificate verification  
+  - `auto`: Automatically disable for localhost/127.0.0.1, enable for remote connections
+
+#### Retry and Timeout Configuration
+
+For clusters under pressure, you can configure retry behavior:
+
+- `CRATE_MAX_RETRIES`: Maximum number of retries for failed queries (default: 3)
+- `CRATE_TIMEOUT`: Base timeout in seconds for queries (default: 30)
+- `CRATE_MAX_TIMEOUT`: Maximum timeout in seconds for retries (default: 120)
+- `CRATE_RETRY_BACKOFF`: Exponential backoff factor between retries (default: 2.0)
 
 ### Connection String Format
 

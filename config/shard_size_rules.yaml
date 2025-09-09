@@ -1,0 +1,194 @@
+# XMover Shard Size Monitoring Rules
+# Configuration file for analyzing CrateDB shard sizes and generating optimization recommendations
+#
+# Rules are evaluated against each table/partition combination returned by the analysis query.
+# Variables available in rule conditions:
+#   - table_schema, table_name, partition_ident
+#   - total_primary_size_gb, avg_shard_size_gb, min_shard_size_gb, max_shard_size_gb
+#   - num_shards_primary, num_shards_replica, num_shards_total
+#   - num_columns, partitioned_by, clustered_by
+#   - cluster_config dictionary with cluster-level metrics
+
+metadata:
+  version: "1.0"
+  description: "CrateDB shard size optimization rules"
+  author: "XMover"
+  last_updated: "2025-10-03"
+
+# Global thresholds referenced in rules
+thresholds:
+  # Core shard size recommendations
+  optimal_shard_size_min_gb: 3
+  optimal_shard_size_max_gb: 70
+  performance_sweet_spot_min_gb: 10
+  performance_sweet_spot_max_gb: 50
+
+  # Workload-specific ranges
+  search_optimized_max_gb: 30
+  write_heavy_min_gb: 30
+  write_heavy_max_gb: 50
+  time_series_min_gb: 20
+  time_series_max_gb: 40
+
+  # Critical thresholds
+  large_shard_threshold_gb: 50
+  small_shard_threshold_gb: 1
+  consolidation_threshold_gb: 3
+
+  # Column-related thresholds
+  wide_table_column_threshold: 500
+  wide_table_shard_max_gb: 25
+  max_columns_default: 1000
+
+  # Cluster density thresholds
+  shards_per_heap_gb_ratio: 20
+  max_shards_per_node_safe: 1000
+  cpu_per_shard_ratio: 1.5
+
+# Table/Partition level rules
+rules:
+  - name: "critical_oversized_shards"
+    category: "size_optimization"
+    severity: "critical"
+    condition: "max_shard_size_gb > thresholds['large_shard_threshold_gb']"
+    recommendation: "Shard size {max_shard_size_gb:.1f}GB exceeds {large_shard_threshold_gb}GB limit. Split shards to improve recovery times and query performance."
+    action_hint: "Consider reducing number_of_shards or using table partitioning"
+
+  - name: "undersized_shards_with_excess_count"
+    category: "size_optimization"
+    severity: "warning"
+    condition: "max_shard_size_gb < thresholds['small_shard_threshold_gb'] and num_shards_primary > cluster_config['total_nodes']"
+    recommendation: "Shards too small ({max_shard_size_gb:.2f}GB < {small_shard_threshold_gb}GB) with {num_shards_primary} primary shards across {cluster_config[total_nodes]} nodes. Consolidate to reduce overhead."
+    action_hint: "Reduce number_of_shards for future partitions or use shard shrinking"
+
+  - name: "wide_table_oversized_shards"
+    category: "performance"
+    severity: "critical"
+    condition: "num_columns > thresholds['wide_table_column_threshold'] and max_shard_size_gb > thresholds['wide_table_shard_max_gb']"
+    recommendation: "Wide table with {num_columns} columns (>{wide_table_column_threshold}) has {max_shard_size_gb:.1f}GB shards. Reduce to <{wide_table_shard_max_gb}GB to mitigate column overhead."
+    action_hint: "Increase number_of_shards or disable indexing for unused columns"
+
+  - name: "suboptimal_small_shards"
+    category: "efficiency"
+    severity: "info"
+    condition: "max_shard_size_gb < thresholds['consolidation_threshold_gb'] and max_shard_size_gb >= thresholds['small_shard_threshold_gb']"
+    recommendation: "Small shards ({max_shard_size_gb:.1f}GB) could be consolidated. Target minimum {consolidation_threshold_gb}GB per shard."
+    action_hint: "Consider reducing number_of_shards for better efficiency"
+
+  - name: "outside_performance_sweet_spot"
+    category: "performance"
+    severity: "info"
+    condition: "(max_shard_size_gb < thresholds['performance_sweet_spot_min_gb'] or max_shard_size_gb > thresholds['performance_sweet_spot_max_gb']) and max_shard_size_gb >= thresholds['consolidation_threshold_gb'] and max_shard_size_gb <= thresholds['large_shard_threshold_gb']"
+    recommendation: "Shard size {max_shard_size_gb:.1f}GB outside performance sweet spot ({performance_sweet_spot_min_gb}-{performance_sweet_spot_max_gb}GB). Consider rebalancing."
+    action_hint: "Adjust number_of_shards to reach optimal range"
+
+  - name: "excessive_column_count"
+    category: "schema_design"
+    severity: "warning"
+    condition: "num_columns > thresholds['max_columns_default']"
+    recommendation: "Table has {num_columns} columns exceeding default limit of {max_columns_default}. May require mapping.total_fields.limit adjustment and impacts memory usage."
+    action_hint: "Review schema design and disable indexing for unused columns"
+
+  - name: "uneven_shard_distribution"
+    category: "balance"
+    severity: "warning"
+    condition: "num_shards_primary > 1 and min_shard_size_gb > 0 and (max_shard_size_gb / min_shard_size_gb) > 3"
+    recommendation: "Uneven shard size distribution: largest {max_shard_size_gb:.1f}GB vs smallest {min_shard_size_gb:.1f}GB (ratio {ratio:.1f}:1). Check data skew."
+    action_hint: "Review partitioning strategy or clustering keys"
+
+  - name: "single_large_shard_table"
+    category: "scalability"
+    severity: "warning"
+    condition: "num_shards_primary == 1 and total_primary_size_gb > thresholds['performance_sweet_spot_max_gb']"
+    recommendation: "Large single shard ({total_primary_size_gb:.1f}GB) limits parallelization. Consider increasing number_of_shards."
+    action_hint: "Increase number_of_shards to enable parallel processing"
+
+# Cluster-level rules (evaluated once per analysis)
+cluster_rules:
+  - name: "heap_to_shard_ratio_exceeded"
+    category: "stability"
+    severity: "warning"
+    condition: "cluster_config['total_shards'] > (cluster_config['total_heap_gb'] * thresholds['shards_per_heap_gb_ratio'])"
+    recommendation: "Total cluster shards ({cluster_config[total_shards]}) exceed recommended ratio of {shards_per_heap_gb_ratio} per GB heap ({cluster_config[total_heap_gb]:.1f}GB). Risk of memory pressure."
+    action_hint: "Consolidate small shards or increase heap size"
+
+  - name: "node_shard_density_critical"
+    category: "stability"
+    severity: "critical"
+    condition: "cluster_config['max_shards_per_node'] > thresholds['max_shards_per_node_safe']"
+    recommendation: "At least one node has {cluster_config[max_shards_per_node]} shards, exceeding safe limit of {max_shards_per_node_safe}. Redistribute immediately."
+    action_hint: "Move shards to other nodes or add capacity"
+
+  - name: "insufficient_cpu_per_shard"
+    category: "performance"
+    severity: "info"
+    condition: "cluster_config['total_shards'] > (cluster_config['total_cpu_cores'] * thresholds['cpu_per_shard_ratio'])"
+    recommendation: "Total shards ({cluster_config[total_shards]}) may exceed CPU capacity ({cluster_config[total_cpu_cores]} cores, recommended {cpu_per_shard_ratio} vCPU per shard)."
+    action_hint: "Consider shard consolidation or adding CPU resources"
+
+# Validation rules for the configuration file itself
+validation:
+  required_fields:
+    - metadata
+    - thresholds
+    - rules
+    - cluster_rules
+
+  rule_required_fields:
+    - name
+    - category
+    - severity
+    - condition
+    - recommendation
+
+  valid_severities:
+    - critical
+    - warning
+    - info
+
+  valid_categories:
+    - size_optimization
+    - performance
+    - efficiency
+    - schema_design
+    - balance
+    - scalability
+    - stability
+
+# Documentation for rule writing
+rule_writing_guide:
+  available_variables:
+    table_level:
+      - "table_schema: Schema name"
+      - "table_name: Table name"
+      - "partition_ident: Partition identifier (may be null)"
+      - "total_primary_size_gb: Total size of primary shards in GB"
+      - "avg_shard_size_gb: Average shard size in GB"
+      - "min_shard_size_gb: Smallest shard size in GB"
+      - "max_shard_size_gb: Largest shard size in GB"
+      - "num_shards_primary: Number of primary shards"
+      - "num_shards_replica: Number of replica shards"
+      - "num_shards_total: Total number of shards"
+      - "num_columns: Number of columns in table"
+      - "partitioned_by: Partitioning column (may be null)"
+      - "clustered_by: Clustering configuration (may be null)"
+
+    cluster_level:
+      - "cluster_config['total_nodes']: Total number of nodes"
+      - "cluster_config['total_cpu_cores']: Total CPU cores"
+      - "cluster_config['total_memory_gb']: Total system memory in GB"
+      - "cluster_config['total_heap_gb']: Total JVM heap in GB"
+      - "cluster_config['max_shards_per_node']: Setting value"
+      - "cluster_config['total_shards']: Total shards in cluster"
+      - "cluster_config['max_shards_per_node']: Actual max shards on any node"
+
+  condition_examples:
+    - "max_shard_size_gb > 50"
+    - "num_columns > 500 and avg_shard_size_gb > 25"
+    - "num_shards_primary == 1 and total_primary_size_gb > 30"
+    - "table_name.startswith('logs_') and max_shard_size_gb < 20"
+
+  recommendation_formatting:
+    - "Use {variable_name} to insert values"
+    - "Use {variable_name:.1f} for decimal formatting"
+    - "Reference thresholds with {threshold_name}"

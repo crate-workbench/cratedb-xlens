@@ -34,7 +34,8 @@ def create_mock_allocation(schema_name: str, table_name: str, shard_id: int,
 def create_mock_shard_detail(schema_name: str, table_name: str, shard_id: int,
                            node_name: str, node_id: str, recovery_type: str,
                            stage: str, files_percent: float, bytes_percent: float,
-                           total_time: int, size: int, is_primary: bool) -> Dict[str, Any]:
+                           total_time: int, size: int, is_primary: bool,
+                           translog_size: int = 0, translog_uncommitted_size: int = 0) -> Dict[str, Any]:
     """Create a mock shard detail response"""
     return {
         'schema_name': schema_name,
@@ -47,12 +48,23 @@ def create_mock_shard_detail(schema_name: str, table_name: str, shard_id: int,
         'recovery': {
             'type': recovery_type,
             'stage': stage,
-            'files': {'percent': files_percent},
-            'size': {'percent': bytes_percent},
+            'files': {
+                'percent': files_percent,
+                'recovered': int(files_percent * 100),
+                'used': 100
+            },
+            'size': {
+                'percent': bytes_percent,
+                'recovered': int(bytes_percent * size),
+                'used': size
+            },
             'total_time': total_time
         },
         'size': size,
-        'primary': is_primary
+        'primary': is_primary,
+        'translog_size': translog_size,
+        'translog_uncommitted_size': translog_uncommitted_size,
+        'max_seq_no': None
     }
 
 
@@ -63,6 +75,7 @@ def test_recovery_info_parsing():
     recovery = RecoveryInfo(
         schema_name='CURVO',
         table_name='PartioffD',
+        partition_values=None,
         shard_id=19,
         node_name='data-hot-1',
         node_id='ZH6fBanGSjanGqeSh-sw0A',
@@ -74,7 +87,11 @@ def test_recovery_info_parsing():
         routing_state='RELOCATING',
         current_state='RELOCATING',
         is_primary=False,
-        size_bytes=56565284209
+        size_bytes=56565284209,
+        translog_size_bytes=0,
+        translog_uncommitted_bytes=0,
+        max_seq_no=None,
+        primary_max_seq_no=None
     )
 
     # Test properties
@@ -123,6 +140,7 @@ def test_recovery_monitor_formatting():
         RecoveryInfo(
             schema_name='CURVO',
             table_name='PartioffD',
+            partition_values=None,
             shard_id=19,
             node_name='data-hot-1',
             node_id='node1',
@@ -134,11 +152,16 @@ def test_recovery_monitor_formatting():
             routing_state='RELOCATING',
             current_state='RELOCATING',
             is_primary=False,
-            size_bytes=56565284209
+            size_bytes=56565284209,
+            translog_size_bytes=0,
+            translog_uncommitted_bytes=0,
+            max_seq_no=None,
+            primary_max_seq_no=None
         ),
         RecoveryInfo(
             schema_name='CURVO',
             table_name='orderTracking',
+            partition_values=None,
             shard_id=7,
             node_name='data-hot-2',
             node_id='node2',
@@ -150,7 +173,11 @@ def test_recovery_monitor_formatting():
             routing_state='INITIALIZING',
             current_state='INITIALIZING',
             is_primary=True,
-            size_bytes=25120456789
+            size_bytes=25120456789,
+            translog_size_bytes=0,
+            translog_uncommitted_bytes=0,
+            max_seq_no=None,
+            primary_max_seq_no=None
         )
     ]
 
@@ -204,18 +231,22 @@ def test_recovery_type_filtering():
     # Mock the get_all_recovering_shards method
     mock_recoveries = [
         RecoveryInfo(
-            schema_name='test', table_name='table1', shard_id=1,
+            schema_name='test', table_name='table1', partition_values=None, shard_id=1,
             node_name='node1', node_id='n1', recovery_type='PEER',
             stage='DONE', files_percent=100.0, bytes_percent=100.0,
             total_time_ms=1000, routing_state='RELOCATING',
-            current_state='RELOCATING', is_primary=True, size_bytes=1000000
+            current_state='RELOCATING', is_primary=True, size_bytes=1000000,
+            translog_size_bytes=0, translog_uncommitted_bytes=0,
+            max_seq_no=None, primary_max_seq_no=None
         ),
         RecoveryInfo(
-            schema_name='test', table_name='table2', shard_id=2,
+            schema_name='test', table_name='table2', partition_values=None, shard_id=2,
             node_name='node2', node_id='n2', recovery_type='DISK',
-            stage='INDEX', files_percent=50.0, bytes_percent=45.0,
+            stage='INDEX', files_percent=50.0, bytes_percent=75.0,
             total_time_ms=2000, routing_state='INITIALIZING',
-            current_state='INITIALIZING', is_primary=False, size_bytes=2000000
+            current_state='INITIALIZING', is_primary=False, size_bytes=2000000,
+            translog_size_bytes=0, translog_uncommitted_bytes=0,
+            max_seq_no=None, primary_max_seq_no=None
         )
     ]
 
