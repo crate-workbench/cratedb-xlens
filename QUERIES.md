@@ -242,3 +242,368 @@ WITH largest_tables AS (
     GROUP BY s.schema_name, s.table_name, s.node['name']
     ORDER BY s.schema_name, s.table_name, s.node['name'];
 ```
+
+# Shard Distribution
+
+```sql
+
+SELECT
+        CASE
+            WHEN size < 1*1024*1024*1024::bigint THEN '<1GB'
+            WHEN size < 5*1024*1024*1024::bigint THEN '1GB-5GB'
+            WHEN size < 10*1024*1024*1024::bigint THEN '5GB-10GB'
+            WHEN size < 50*1024*1024*1024::bigint THEN '10GB-50GB'
+            ELSE '>=50GB'
+        END AS size_bucket,
+        COUNT(*) AS shards_in_bucket,
+        ROUND(AVG(size)::numeric / 1024 / 1024 / 1024, 2) AS avg_bucket_size_gb
+    FROM sys.shards
+    WHERE state = 'STARTED'
+    GROUP BY size_bucket
+    ORDER BY
+        CASE size_bucket
+            WHEN '<1GB' THEN 1
+            WHEN '1GB-5GB' THEN 2
+            WHEN '5GB-10GB' THEN 3
+            WHEN '10GB-50GB' THEN 4
+            ELSE 5
+        END;
+```
+
+## Shard Distribution by Node
+
+```sql
+
+SELECT
+        s.node['name'] as node_name,
+        CASE
+            WHEN size < 1*1024*1024*1024::bigint THEN '<1GB'
+            WHEN size < 5*1024*1024*1024::bigint THEN '1GB-5GB'
+            WHEN size < 10*1024*1024*1024::bigint THEN '5GB-10GB'
+            WHEN size < 50*1024*1024*1024::bigint THEN '10GB-50GB'
+            ELSE '>=50GB'
+        END AS size_bucket,
+        COUNT(*) AS shards_in_bucket,
+        ROUND(AVG(size)::numeric / 1024 / 1024 / 1024, 2) AS avg_bucket_size_gb
+    FROM sys.shards s
+    WHERE state = 'STARTED'
+    GROUP BY node_name, size_bucket
+    ORDER BY node_name, size_bucket;
+```
+
+## Active Shard detection
+```sql
+
+SELECT
+        sh.schema_name,
+        sh.table_name,
+        sh.id AS shard_id, primary, node['name'],
+        sh.partition_ident,
+        sh.translog_stats['uncommitted_size'] / 1024^2 AS translog_uncommitted_bytes,
+        sh.seq_no_stats['local_checkpoint'] - sh.seq_no_stats['global_checkpoint'] AS checkpoint_delta
+    FROM
+        sys.shards AS sh
+    WHERE
+        sh.state = 'STARTED'
+        AND sh.translog_stats['uncommitted_size'] > 10 * 1024 ^2  -- threshold: e.g., 10MB
+        OR (sh.seq_no_stats['local_checkpoint'] - sh.seq_no_stats['global_checkpoint'] > 1000) -- significant lag
+    ORDER BY
+        sh.translog_stats['uncommitted_size'] DESC,
+        checkpoint_delta DESC
+        limit 10;
+```
+
+```sql
+partition-id / values from information_schema table by using a join
+ALTER TABLE "TURVO"."shipmentFormFieldData" REROUTE CANCEL SHARD 11 on 'data-hot-8' WITH (allow_primary=False);
+```
+
+```sql
+
+SELECT
+                    sh.schema_name,
+                    sh.table_name,
+                    translate(p.values::text, ':{}', '=()') as partition_values,
+                    sh.id AS shard_id,
+                    node['name'],
+                    sh.translog_stats['uncommitted_size'] / 1024^2 AS translog_uncommitted_mb
+                FROM
+                    sys.shards AS sh
+                LEFT JOIN information_schema.table_partitions p
+                    ON sh.table_name = p.table_name
+                    AND sh.schema_name = p.table_schema
+                    AND sh.partition_ident = p.partition_ident
+                WHERE
+                    sh.state = 'STARTED'
+                    AND sh.translog_stats['uncommitted_size'] > 300 * 1024 ^2  -- threshold: e.g., 10MB
+                    AND primary=FALSE
+                ORDER BY
+                    6 DESC LIMIT 10;
++-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
+| schema_name | table_name                   | partition_values           | shard_id | node['name'] | translog_uncommitted_mb |
++-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
+| TURVO       | shipmentFormFieldData        | NULL                       |       14 | data-hot-6   |     7011.800104141235   |
+| TURVO       | shipmentFormFieldData        | NULL                       |       27 | data-hot-7   |     5131.491161346436   |
+| TURVO       | shipmentFormFieldData        | NULL                       |        0 | data-hot-9   |     2460.8706073760986  |
+| TURVO       | shipmentFormFieldData        | NULL                       |        7 | data-hot-2   |     1501.8993682861328  |
+| TURVO       | shipmentFormFieldData        | NULL                       |       10 | data-hot-5   |      504.0952272415161  |
+| TURVO       | shipmentFormFieldData        | NULL                       |       29 | data-hot-3   |      501.0663766860962  |
+| TURVO       | shipmentFormFieldData        | NULL                       |       16 | data-hot-8   |      497.5628480911255  |
+| TURVO       | shipmentFormFieldData_events | ("sync_day"=1757376000000) |        3 | data-hot-2   |      481.20221996307373 |
+| TURVO       | shipmentFormFieldData_events | ("sync_day"=1757376000000) |        4 | data-hot-4   |      473.12464427948    |
+| TURVO       | orderFormFieldData           | NULL                       |        5 | data-hot-1   |      469.4924907684326  |
++-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
+
+```
+
+
+# Segements per Shard
+
+```sql
+SELECT
+        shard_id,
+        table_schema,
+        table_name,
+        COUNT(*) AS segment_count
+    FROM sys.segments
+    GROUP BY shard_id, table_schema, table_name
+    ORDER BY segment_count DESC
+    LIMIT 10;
+```
+
+```sql
+
+SELECT
+        s.node['name'] AS node_name,
+        CASE
+            WHEN size < 512*1024*1024::bigint THEN '<512MB'
+            WHEN size < 2.5*1024*1024*1024::bigint THEN '512MB-2.5GB'
+            WHEN size < 5*1024*1024*1024::bigint THEN '2.5GB-5GB'
+            WHEN size < 25*1024*1024*1024::bigint THEN '5GB-25GB'
+            ELSE '>=25GB'
+        END AS size_bucket,
+        COUNT(*) AS segments_in_bucket,
+        ROUND(AVG(size)::numeric / 1024 / 1024 / 1024, 2) AS avg_segment_size_gb
+    FROM sys.segments s
+    GROUP BY node_name, size_bucket
+    ORDER BY node_name, size_bucket;
+```
+
+### Count retention_lease
+
+### for a partition
+
+```sql
+cr> SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipmentFormFieldData' AND partition_ident = '04732dpl6or3gd1
+    o60o30c1g' order by array_length(retention_leases['leases'], 1);
++------------+----+
+| cnt_leases | id |
++------------+----+
+|          1 |  5 |
+|          1 |  4 |
+|          1 |  7 |
+|          1 |  0 |
+|          1 |  3 |
+|          1 |  6 |
+|          1 |  1 |
+|          1 |  2 |
++------------+----+
+SELECT 8 rows in set (0.038 sec)
+cr>
+
+```
+
+### for a table
+
+```sql
+
+SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipmentFormFieldData' AND array_length(retention_leases['leases'], 1) > 1 order by 1;
+```
+
+
+#### list partition ids
+
+```sql
+cr> SELECT partition_ident, values
+    FROM information_schema.table_partitions
+    WHERE table_schema = 'TURVO'
+      AND table_name = 'shipmentFormFieldData' limit 100;
++--------------------------+--------------------------------+
+| partition_ident          | values                         |
++--------------------------+--------------------------------+
+| 04732dhi6srjedhg60o30c1g | {"id_ts_month": 1627776000000} |
+| 04732d9o60qj2d9i60o30c1g | {"id_ts_month": 1580515200000} |
+| 04732dhj6krj4d1o60o30c1g | {"id_ts_month": 1635724800000} |
+| 04732dhg64qj2c1k60o30c1g | {"id_ts_month": 1601510400000} |
+| 04732dhk60sjid9i60o30c1g | {"id_ts_month": 1640995200000} |
+```
+
+cr> SELECT partition_ident, values
+    FROM information_schema.table_partitions
+    WHERE table_schema = 'TURVO'
+      AND table_name = 'shipmentFormFieldData' limit 100;
++--------------------------+--------------------------------+
+| partition_ident          | values                         |
++--------------------------+--------------------------------+
+| 04732dhi6srjedhg60o30c1g | {"id_ts_month": 1627776000000} |
+| 04732d9o60qj2d9i60o30c1g | {"id_ts_month": 1580515200000} |
+| 04732dhj6krj4d1o60o30c1g | {"id_ts_month": 1635724800000} |
+| 04732dhg64qj2c1k60o30c1g | {"id_ts_month": 1601510400000} |
+| 04732dhk60sjid9i60o30c1g | {"id_ts_month": 1640995200000} |
+| 04732dpk60rjgdpi60o30c1g | {"id_ts_month": 1740787200000} |
+| 04732dhp6ooj2e1k60o30c1g | {"id_ts_month": 1696118400000} |
+| 04732dhl6or36cpm60o30c1g | {"id_ts_month": 1656633600000} |
+| 04732d9p6op38c1g60o30c1g | {"id_ts_month": 1596240000000} |
+| 04732dhl6go38c9m60o30c1g | {"id_ts_month": 1654041600000} |
+| 04732dpg6orj8d9m60o30c1g | {"id_ts_month": 1706745600000} |
+| 04732d9p60sjce9m60o30c1g | {"id_ts_month": 1590969600000} |
+| 04732dhi6ko3idpm60o30c1g | {"id_ts_month": 1625097600000} |
+| 04732dpj6kr3ge9m60o30c1g | {"id_ts_month": 1735689600000} |
+| 04732dhm74s3acho60o30c1g | {"id_ts_month": 1669852800000} |
+| 04732dpi6koj8e1o60o30c1g | {"id_ts_month": 1725148800000} |
+| 04732dhg6orjgc1o60o30c1g | {"id_ts_month": 1606780800000} |
+| 04732dhm6gqjgchk60o30c1g | {"id_ts_month": 1664582400000} |
+| 04732d9p70sj2e1k60o30c1g | {"id_ts_month": 1598918400000} |
+| 04732dhk6cr3ecpm60o30c1g | {"id_ts_month": 1643673600000} |
+| 04732d9o6kr3ie9i60o30c1g | {"id_ts_month": 1585699200000} |
+| 04732dhp60s38e1g60o30c1g | {"id_ts_month": 1690848000000} |
+| 04732dhn6kp30e9m60o30c1g | {"id_ts_month": 1675209600000} |
+| 04732dpk6oo3adpm60o30c1g | {"id_ts_month": 1746057600000} |
+| 04732dpg74p3ac9i60o30c1g | {"id_ts_month": 1709251200000} |
+| 04732dph6gqj4c9m60o30c1g | {"id_ts_month": 1714521600000} |
+| 04732dhn68qj6c9i60o30c1g | {"id_ts_month": 1672531200000} |
+| 04732dhm6sp3cc1o60o30c1g | {"id_ts_month": 1667260800000} |
+| 04732dhl64pjccpi60o30c1g | {"id_ts_month": 1651363200000} |
+| 04732dph6sp30c1g60o30c1g | {"id_ts_month": 1717200000000} |
+| 04732dph74rjichg60o30c1g | {"id_ts_month": 1719792000000} |
+| 04732dpj6co32c9i60o30c1g | {"id_ts_month": 1733011200000} |
+| 04732dpg64pjge1o60o30c1g | {"id_ts_month": 1701388800000} |
+| 04732dpj70pjce1g60o30c1g | {"id_ts_month": 1738368000000} |
+| 04732dpk6cq3cd9m60o30c1g | {"id_ts_month": 1743465600000} |
+| 04732dhh6sp36d9i60o30c1g | {"id_ts_month": 1617235200000} |
+| 04732dpi68q3ec1k60o30c1g | {"id_ts_month": 1722470400000} |
+| 04732dho70ojce9m60o30c1g | {"id_ts_month": 1688169600000} |
+| 04732dhg6gojge1o60o30c1g | {"id_ts_month": 1604188800000} |
+| 04732dhk70rjec9i60o30c1g | {"id_ts_month": 1648771200000} |
+| 04732dhj70pj2dho60o30c1g | {"id_ts_month": 1638316800000} |
+| 04732dho60pj0dpi60o30c1g | {"id_ts_month": 1680307200000} |
+| 04732d9o6co34c1o60o30c1g | {"id_ts_month": 1583020800000} |
+| 04732dhj60q3ad1k60o30c1g | {"id_ts_month": 1630454400000} |
+| 04732dhg74q3ae9i60o30c1g | {"id_ts_month": 1609459200000} |
+| 04732dhl74pj2chg60o30c1g | {"id_ts_month": 1659312000000} |
+| 04732dpi6srj8c1o60o30c1g | {"id_ts_month": 1727740800000} |
+*| 04732dpl6go30dhk60o30c1g | {"id_ts_month": 1754006400000} |
+| 04732dhp70rjidho60o30c1g | {"id_ts_month": 1698796800000} |
+| 04732dhi68qj0d9m60o30c1g | {"id_ts_month": 1622505600000} |
+| 04732d9p6cqjcc9m60o30c1g | {"id_ts_month": 1593561600000} |
+| 04732dpg6go3cdpi60o30c1g | {"id_ts_month": 1704067200000} |
+| 04732dho68s3ie9i60o30c1g | {"id_ts_month": 1682899200000} |
+| 04732d9n6ss36dho60o30c1g | {"id_ts_month": 1577836800000} |
+| 04732dpj60q32e9i60o30c1g | {"id_ts_month": 1730419200000} |
+| 04732dhm64sjic1k60o30c1g | {"id_ts_month": 1661990400000} |
+| 04732dhh6gqjadho60o30c1g | {"id_ts_month": 1614556800000} |
+| 04732dho6kqjedpm60o30c1g | {"id_ts_month": 1685577600000} |
+| 04732dhn6sr34e1o60o30c1g | {"id_ts_month": 1677628800000} |
+| 04732dph64sj4e9m60o30c1g | {"id_ts_month": 1711929600000} |
+| 04732dhp6cqj4dhk60o30c1g | {"id_ts_month": 1693526400000} |
+| 04732dpk70rj6dhg60o30c1g | {"id_ts_month": 1748736000000} |
+| 04732dpl64pj4e1g60o30c1g | {"id_ts_month": 1751328000000} |
+*| 04732dpl6or3gd1o60o30c1g | {"id_ts_month": 1756684800000} |
+| 04732dhh74s34dpi60o30c1g | {"id_ts_month": 1619827200000} |
+| 04732dhj6co38dhk60o30c1g | {"id_ts_month": 1633046400000} |
+| 04732dhk6oo3icho60o30c1g | {"id_ts_month": 1646092800000} |
+| 04732dhh68oj6dpm60o30c1g | {"id_ts_month": 1612137600000} |
++--------------------------+--------------------------------+
+SELECT 68 rows in set (0.006 sec)
+
+## Disable Rebalancing
+
+SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"='xxx'; -- all / none
+[data-hot-7] updating [cluster.routing.rebalance.enable] from [all] to [none]`
+
+
+### Report on schema, tables, sizes, ...
+
+```sql
+WITH columns AS (
+    SELECT table_schema,
+           table_name,
+           COUNT(*) AS num_columns
+    FROM information_schema.columns
+    GROUP BY ALL
+), tables AS (
+    SELECT table_schema,
+           table_name,
+           partitioned_by,
+           clustered_by
+    FROM information_schema.tables
+), shards AS (
+    SELECT schema_name AS table_schema,
+           table_name,
+           partition_ident,
+           SUM(size) FILTER (WHERE primary = TRUE) / POWER(1024, 3) AS total_primary_size_gb,
+           AVG(size) / POWER(1024, 3) AS avg_shard_size_gb,
+           MIN(size) / POWER(1024, 3) AS min_shard_size_gb,
+           MAX(size) / POWER(1024, 3) AS max_shard_size_gb,
+           COUNT(*) FILTER (WHERE primary = TRUE) AS num_shards_primary,
+           COUNT(*) FILTER (WHERE primary = FALSE) AS num_shards_replica,
+           COUNT(*) AS num_shards_total
+    FROM sys.shards
+    GROUP BY ALL
+)
+SELECT s.*,
+       num_columns,
+       partitioned_by[1] AS partitioned_by,
+       clustered_by
+FROM shards s
+JOIN columns c ON s.table_name = c.table_name AND s.table_schema = c.table_schema
+JOIN tables t ON s.table_name = t.table_name AND s.table_schema = t.table_schema
+ORDER BY table_schema, table_name, partition_ident
+```
+
+----
+partition_ident          | values                         |
++--------------------------+--------------------------------+
+| 04732dhp6ooj2e1k60o30c1g | {"id_ts_month": 1696118400000} |
+| 04732dpk60rjgdpi60o30c1g | {"id_ts_month": 1740787200000} |
+| 04732dhl6or36cpm60o30c1g | {"id_ts_month": 1656633600000} |
+| 04732dpi6srj8c1o60o30c1g | {"id_ts_month": 1727740800000} |
+| 04732dhl74pj2chg60o30c1g | {"id_ts_month": 1659312000000} |
+| 04732dhl6go38c9m60o30c1g | {"id_ts_month": 1654041600000} |
+| 04732dpg6orj8d9m60o30c1g | {"id_ts_month": 1706745600000} |
+| 04732dpl6go30dhk60o30c1g | {"id_ts_month": 1754006400000} |
+| 04732dhp70rjidho60o30c1g | {"id_ts_month": 1698796800000} |
+| 04732dpj6kr3ge9m60o30c1g | {"id_ts_month": 1735689600000} |
+| 04732dhm74s3acho60o30c1g | {"id_ts_month": 1669852800000} |
+| 04732dpi6koj8e1o60o30c1g | {"id_ts_month": 1725148800000} |
+| 04732dhm6gqjgchk60o30c1g | {"id_ts_month": 1664582400000} |
+| 04732dpg6go3cdpi60o30c1g | {"id_ts_month": 1704067200000} |
+| 04732dho68s3ie9i60o30c1g | {"id_ts_month": 1682899200000} |
+| 04732dhp60s38e1g60o30c1g | {"id_ts_month": 1690848000000} |
+| 04732dhn6kp30e9m60o30c1g | {"id_ts_month": 1675209600000} |
+| 04732dpk6oo3adpm60o30c1g | {"id_ts_month": 1746057600000} |
+| 04732dpj60q32e9i60o30c1g | {"id_ts_month": 1730419200000} |
+| 04732dpl74p3edho60o30c1g | {"id_ts_month": 1759276800000} |
+| 04732dhm64sjic1k60o30c1g | {"id_ts_month": 1661990400000} |
+| 04732dpg74p3ac9i60o30c1g | {"id_ts_month": 1709251200000} |
+| 04732dph6gqj4c9m60o30c1g | {"id_ts_month": 1714521600000} |
+| 04732dhn68qj6c9i60o30c1g | {"id_ts_month": 1672531200000} |
+| 04732dhm6sp3cc1o60o30c1g | {"id_ts_month": 1667260800000} |
+| 04732dhl64pjccpi60o30c1g | {"id_ts_month": 1651363200000} |
+| 04732dho6kqjedpm60o30c1g | {"id_ts_month": 1685577600000} |
+| 04732dhn6sr34e1o60o30c1g | {"id_ts_month": 1677628800000} |
+| 04732dph74rjichg60o30c1g | {"id_ts_month": 1719792000000} |
+| 04732dph6sp30c1g60o30c1g | {"id_ts_month": 1717200000000} |
+| 04732dph64sj4e9m60o30c1g | {"id_ts_month": 1711929600000} |
+| 04732dpj6co32c9i60o30c1g | {"id_ts_month": 1733011200000} |
+| 04732dhp6cqj4dhk60o30c1g | {"id_ts_month": 1693526400000} |
+| 04732dpg64pjge1o60o30c1g | {"id_ts_month": 1701388800000} |
+| 04732dpk70rj6dhg60o30c1g | {"id_ts_month": 1748736000000} |
+| 04732dpl64pj4e1g60o30c1g | {"id_ts_month": 1751328000000} |
+| 04732dpj70pjce1g60o30c1g | {"id_ts_month": 1738368000000} |
+| 04732dpl6or3gd1o60o30c1g | {"id_ts_month": 1756684800000} |
+| 04732dpk6cq3cd9m60o30c1g | {"id_ts_month": 1743465600000} |
+| 04732dpi68q3ec1k60o30c1g | {"id_ts_month": 1722470400000} |
+| 04732dho70ojce9m60o30c1g | {"id_ts_month": 1688169600000} |
+| 04732dho60pj0dpi60o30c1g | {"id_ts_month": 1680307200000} |
++--------------------------+--------------------------------+

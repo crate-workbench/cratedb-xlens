@@ -5,6 +5,7 @@ Command line interface for XMover - CrateDB Shard Analyzer and Movement Tool
 import sys
 import time
 import os
+import json
 from typing import Optional
 try:
     import click
@@ -19,8 +20,9 @@ except ImportError as e:
     sys.exit(1)
 
 from .database import CrateDBClient
-from .analyzer import ShardAnalyzer, RecoveryMonitor
+from .analyzer import ShardAnalyzer, RecoveryMonitor, ActiveShardMonitor
 from .distribution_analyzer import DistributionAnalyzer
+from .shard_size_monitor import ShardSizeMonitor, validate_rules_file
 
 
 console = Console()
@@ -46,31 +48,73 @@ def format_percentage(value: float) -> str:
     return f"[{color}]{value:.1f}%[/{color}]"
 
 
-def format_translog_info(recovery_info) -> str:
-    """Format translog size information with color coding"""
-    tl_bytes = recovery_info.translog_size_bytes
+def format_table_display_with_partition(schema_name: str, table_name: str, partition_values: str = None) -> str:
+    """Format table display with partition values if available"""
+    # Create base table name
+    if schema_name and schema_name != 'doc':
+        base_display = f"{schema_name}.{table_name}"
+    else:
+        base_display = table_name
     
-    # Only show if significant (>10MB for production)
-    if tl_bytes < 10 * 1024 * 1024:  # 10MB for production
+    # Add partition values if available
+    if partition_values:
+        return f"{base_display} {partition_values}"
+    else:
+        return base_display
+
+
+def format_translog_info(recovery_info) -> str:
+    """Format translog size information with color coding showing both total and uncommitted sizes"""
+    tl_total_bytes = recovery_info.translog_size_bytes
+    tl_uncommitted_bytes = recovery_info.translog_uncommitted_bytes
+    
+    # Only show if significant (>10MB for production) - check uncommitted size primarily
+    if tl_uncommitted_bytes < 10 * 1024 * 1024 and tl_total_bytes < 50 * 1024 * 1024:  # 10MB uncommitted or 50MB total
         return ""
     
-    tl_gb = recovery_info.translog_size_gb
+    tl_total_gb = recovery_info.translog_size_gb
+    tl_uncommitted_gb = recovery_info.translog_uncommitted_gb
+    uncommitted_percentage = recovery_info.translog_uncommitted_percentage
     
-    # Color coding based on size
-    if tl_gb >= 5.0:
+    # Color coding based on uncommitted size and percentage
+    # Round percentage to handle floating-point precision issues
+    rounded_percentage = round(uncommitted_percentage, 1)
+    if tl_uncommitted_gb >= 5.0 or rounded_percentage >= 80.0:
         color = "red"
-    elif tl_gb >= 1.0:
+    elif tl_uncommitted_gb >= 1.0 or rounded_percentage >= 50.0:
         color = "yellow"
     else:
         color = "green"
     
-    # Format size
-    if tl_gb >= 1.0:
-        size_str = f"{tl_gb:.1f}GB"
+    # Format sizes
+    if tl_total_gb >= 1.0:
+        total_str = f"{tl_total_gb:.1f}GB"
     else:
-        size_str = f"{tl_gb*1000:.0f}MB"
+        total_str = f"{tl_total_gb*1000:.0f}MB"
+        
+    if tl_uncommitted_gb >= 1.0:
+        uncommitted_str = f"{tl_uncommitted_gb:.1f}GB"
+    else:
+        uncommitted_str = f"{tl_uncommitted_gb*1000:.0f}MB"
     
-    return f" [dim]([{color}]TL:{size_str}[/{color}])[/dim]"
+    return f" [dim]([{color}]TL:{total_str} / {uncommitted_str} / {uncommitted_percentage:.0f}%[/{color}])[/dim]"
+
+
+def format_recovery_progress(recovery_info) -> str:
+    """Format recovery progress, using sequence number progress for replicas when available"""
+    if not recovery_info.is_primary and recovery_info.seq_no_progress is not None:
+        # For replica shards, show sequence number progress if available
+        seq_progress = recovery_info.seq_no_progress
+        traditional_progress = recovery_info.overall_progress
+        
+        # If sequence progress is significantly different from traditional progress, show both
+        if abs(seq_progress - traditional_progress) > 5.0:
+            return f"{seq_progress:.1f}% (seq) / {traditional_progress:.1f}% (rec)"
+        else:
+            return f"{seq_progress:.1f}% (seq)"
+    else:
+        # For primary shards or when sequence progress unavailable, use traditional progress
+        return f"{recovery_info.overall_progress:.1f}%"
 
 
 @click.group()
@@ -99,9 +143,18 @@ def main(ctx):
 
 @main.command()
 @click.option('--table', '-t', help='Analyze specific table only')
+@click.option('--largest', type=int, help='Show N largest tables/partitions by size')
+@click.option('--smallest', type=int, help='Show N smallest tables/partitions by size')
+@click.option('--no-zero-size', is_flag=True, default=False, help='Exclude zero-sized tables from smallest results')
 @click.pass_context
-def analyze(ctx, table: Optional[str]):
-    """Analyze current shard distribution across nodes and zones"""
+def analyze(ctx, table: Optional[str], largest: Optional[int], smallest: Optional[int], no_zero_size: bool):
+    """Analyze current shard distribution across nodes and zones
+    
+    Use --largest N to show the N largest tables/partitions by total size.
+    Use --smallest N to show the N smallest tables/partitions by total size.
+    Use --no-zero-size with --smallest to exclude zero-sized tables from results.
+    Both options properly handle partitioned tables and show detailed size breakdowns.
+    """
     client = ctx.obj['client']
     analyzer = ShardAnalyzer(client)
 
@@ -182,6 +235,280 @@ def analyze(ctx, table: Optional[str]):
         )
 
     console.print(node_table)
+    console.print()
+
+    # Shard Size Overview
+    size_overview = analyzer.get_shard_size_overview()
+    
+    size_table = Table(title="Shard Size Distribution", box=box.ROUNDED)
+    size_table.add_column("Size Range", style="cyan")
+    size_table.add_column("Count", justify="right", style="magenta")
+    size_table.add_column("Percentage", justify="right", style="green")
+    size_table.add_column("Avg Size", justify="right", style="blue")
+    size_table.add_column("Max Size", justify="right", style="red")
+    size_table.add_column("Total Size", justify="right", style="yellow")
+
+    total_shards = size_overview['total_shards']
+    
+    # Define color coding thresholds
+    large_shards_threshold = 0   # warn if ANY shards >=50GB (red flag)
+    small_shards_percentage_threshold = 40  # warn if >40% of shards are small (<1GB)
+    
+    for bucket_name, bucket_data in size_overview['size_buckets'].items():
+        count = bucket_data['count']
+        avg_size = bucket_data['avg_size_gb']
+        total_size = bucket_data['total_size']
+        percentage = (count / total_shards * 100) if total_shards > 0 else 0
+        
+        # Apply color coding
+        count_str = str(count)
+        percentage_str = f"{percentage:.1f}%"
+        
+        # Color code large shards (>=50GB) - ANY large shard is a red flag
+        if bucket_name == '>=50GB' and count > large_shards_threshold:
+            count_str = f"[red]{count}[/red]"
+            percentage_str = f"[red]{percentage:.1f}%[/red]"
+        
+        # Color code if too many very small shards (<1GB)
+        if bucket_name == '<1GB' and percentage > small_shards_percentage_threshold:
+            count_str = f"[yellow]{count}[/yellow]"
+            percentage_str = f"[yellow]{percentage:.1f}%[/yellow]"
+        
+        size_table.add_row(
+            bucket_name,
+            count_str,
+            percentage_str,
+            f"{avg_size:.2f}GB" if avg_size > 0 else "0GB",
+            f"{bucket_data['max_size']:.2f}GB" if bucket_data['max_size'] > 0 else "0GB",
+            format_size(total_size)
+        )
+    
+    console.print(size_table)
+    
+    # Add footer showing total number of tables/partitions
+    all_tables = analyzer.get_table_size_breakdown(limit=None)
+    total_tables_partitions = len(all_tables)
+    console.print(f"[dim]📊 Total: {total_tables_partitions} table/partition(s) in cluster[/dim]")
+    
+    # Add schema breakdown table
+    schema_stats = {}
+    for table_info in all_tables:
+        # Extract schema from table name (format: "schema.table" or just "table")
+        table_name = table_info['table_name']
+        if '.' in table_name:
+            schema = table_name.split('.')[0]
+        else:
+            schema = 'doc'  # Default schema
+            
+        partition = table_info['partition']
+        has_partition = partition != 'N/A'
+        
+        if schema not in schema_stats:
+            schema_stats[schema] = {
+                'tables': 0,
+                'partitioned_tables': set(),
+                'total_partitions': 0
+            }
+        
+        if has_partition:
+            # This is a partitioned table
+            base_table_name = table_name
+            schema_stats[schema]['partitioned_tables'].add(base_table_name)
+            schema_stats[schema]['total_partitions'] += 1
+        else:
+            # This is a regular table
+            schema_stats[schema]['tables'] += 1
+    
+    # Create schema breakdown table
+    console.print()
+    schema_table = Table(title="Schema Breakdown", box=box.ROUNDED)
+    schema_table.add_column("Schema", style="cyan")
+    schema_table.add_column("Tables", justify="right", style="green")
+    schema_table.add_column("Partitioned Tables", justify="right", style="magenta")
+    schema_table.add_column("Total Partitions", justify="right", style="yellow")
+    
+    # Sort schemas alphabetically (case-insensitive)
+    for schema in sorted(schema_stats.keys(), key=str.lower):
+        stats = schema_stats[schema]
+        tables_count = stats['tables']
+        partitioned_tables_count = len(stats['partitioned_tables'])
+        total_partitions = stats['total_partitions']
+        
+        schema_table.add_row(
+            schema,
+            str(tables_count),
+            str(partitioned_tables_count),
+            str(total_partitions)
+        )
+    
+    console.print(schema_table)
+    
+    # Add warnings if thresholds are exceeded
+    warnings = []
+    if size_overview['large_shards_count'] > large_shards_threshold:
+        warnings.append(f"[red]🔥 CRITICAL: {size_overview['large_shards_count']} large shards (>=50GB) detected - IMMEDIATE ACTION REQUIRED![/red]")
+        warnings.append(f"[red]   Large shards cause slow recovery, memory pressure, and performance issues[/red]")
+    
+    # Calculate percentage of very small shards (<1GB)
+    very_small_count = size_overview['size_buckets']['<1GB']['count']
+    very_small_percentage = (very_small_count / total_shards * 100) if total_shards > 0 else 0
+    
+    if very_small_percentage > small_shards_percentage_threshold:
+        warnings.append(f"[yellow]⚠️  {very_small_percentage:.1f}% of shards are very small (<1GB) - consider optimizing shard allocation[/yellow]")
+        warnings.append(f"[yellow]   Too many small shards create metadata overhead and reduce efficiency[/yellow]")
+    
+    if warnings:
+        console.print()
+        for warning in warnings:
+            console.print(warning)
+    
+    # Show compact table/partition breakdown of large shards if any exist
+    if size_overview['large_shards_count'] > 0:
+        console.print()
+        large_shards_details = analyzer.get_large_shards_details()
+        
+        # Aggregate by table/partition
+        table_partition_stats = {}
+        for shard in large_shards_details:
+            # Create table key with schema
+            table_display = shard['table_name']
+            if shard['schema_name'] and shard['schema_name'] != 'doc':
+                table_display = f"{shard['schema_name']}.{shard['table_name']}"
+            
+            # Create partition key
+            partition_key = shard['partition_values'] or "N/A"
+            
+            # Create combined key
+            key = (table_display, partition_key)
+            
+            if key not in table_partition_stats:
+                table_partition_stats[key] = {
+                    'sizes': [],
+                    'primary_count': 0,
+                    'replica_count': 0,
+                    'total_size': 0.0
+                }
+            
+            # Aggregate stats
+            stats = table_partition_stats[key]
+            stats['sizes'].append(shard['size_gb'])
+            stats['total_size'] += shard['size_gb']
+            if shard['is_primary']:
+                stats['primary_count'] += 1
+            else:
+                stats['replica_count'] += 1
+        
+        # Create compact table
+        large_shards_table = Table(title=f"Large Shards Breakdown by Table/Partition (>=50GB)", box=box.ROUNDED)
+        large_shards_table.add_column("Table", style="cyan")
+        large_shards_table.add_column("Partition", style="blue")
+        large_shards_table.add_column("Shards", justify="right", style="magenta")
+        large_shards_table.add_column("P/R", justify="center", style="yellow") 
+        large_shards_table.add_column("Min Size", justify="right", style="green")
+        large_shards_table.add_column("Avg Size", justify="right", style="red")
+        large_shards_table.add_column("Max Size", justify="right", style="red")
+        large_shards_table.add_column("Total Size", justify="right", style="red")
+        
+        # Sort by total size descending (most problematic first)
+        sorted_stats = sorted(table_partition_stats.items(), key=lambda x: x[1]['total_size'], reverse=True)
+        
+        for (table_name, partition_key), stats in sorted_stats:
+            # Format partition display
+            partition_display = partition_key
+            if partition_display != "N/A" and len(partition_display) > 25:
+                partition_display = partition_display[:22] + "..."
+            
+            # Calculate size stats
+            sizes = stats['sizes']
+            min_size = min(sizes)
+            avg_size = sum(sizes) / len(sizes)
+            max_size = max(sizes)
+            total_size = stats['total_size']
+            total_shards = len(sizes)
+            
+            # Format primary/replica ratio
+            p_r_display = f"{stats['primary_count']}P/{stats['replica_count']}R"
+            
+            large_shards_table.add_row(
+                table_name,
+                partition_display,
+                str(total_shards),
+                p_r_display,
+                f"{min_size:.1f}GB",
+                f"{avg_size:.1f}GB", 
+                f"{max_size:.1f}GB",
+                f"{total_size:.1f}GB"
+            )
+        
+        console.print(large_shards_table)
+        
+        # Add summary stats
+        total_primary = sum(stats['primary_count'] for stats in table_partition_stats.values())
+        total_replica = sum(stats['replica_count'] for stats in table_partition_stats.values())
+        affected_table_partitions = len(table_partition_stats)
+        
+        console.print()
+        console.print(f"[dim]📊 Summary: {total_primary} primary, {total_replica} replica shards across {affected_table_partitions} table/partition(s)[/dim]")
+    
+    # Show compact table/partition breakdown of smallest shards (top 10)
+    console.print()
+    small_shards_details = analyzer.get_small_shards_details(limit=10)
+    
+    if small_shards_details:
+        # Create compact table
+        small_shards_table = Table(title=f"Smallest Shards Breakdown by Table/Partition (Top 10)", box=box.ROUNDED)
+        small_shards_table.add_column("Table", style="cyan")
+        small_shards_table.add_column("Partition", style="blue")
+        small_shards_table.add_column("Shards", justify="right", style="magenta")
+        small_shards_table.add_column("P/R", justify="center", style="yellow") 
+        small_shards_table.add_column("Min Size", justify="right", style="green")
+        small_shards_table.add_column("Avg Size", justify="right", style="red")
+        small_shards_table.add_column("Max Size", justify="right", style="red")
+        small_shards_table.add_column("Total Size", justify="right", style="red")
+        
+        for entry in small_shards_details:
+            table_name = entry['table_name']
+            partition_key = entry['partition_key']
+            stats = entry['stats']
+            
+            # Format partition display
+            partition_display = partition_key
+            if partition_display != "N/A" and len(partition_display) > 25:
+                partition_display = partition_display[:22] + "..."
+            
+            # Calculate size stats
+            sizes = stats['sizes']
+            min_size = min(sizes)
+            avg_size = sum(sizes) / len(sizes)
+            max_size = max(sizes)
+            total_size = stats['total_size']
+            total_shards = len(sizes)
+            
+            # Format primary/replica ratio
+            p_r_display = f"{stats['primary_count']}P/{stats['replica_count']}R"
+            
+            small_shards_table.add_row(
+                table_name,
+                partition_display,
+                str(total_shards),
+                p_r_display,
+                f"{min_size:.1f}GB",
+                f"{avg_size:.1f}GB", 
+                f"{max_size:.1f}GB",
+                f"{total_size:.1f}GB"
+            )
+        
+        console.print(small_shards_table)
+        
+        # Add summary stats for smallest shards
+        total_small_primary = sum(entry['stats']['primary_count'] for entry in small_shards_details)
+        total_small_replica = sum(entry['stats']['replica_count'] for entry in small_shards_details)
+        small_table_partitions = len(small_shards_details)
+        
+        console.print()
+        console.print(f"[dim]📊 Summary: {total_small_primary} primary, {total_small_replica} replica shards across {small_table_partitions} table/partition(s) with smallest average sizes[/dim]")
+    
+    console.print()
 
     # Table-specific analysis if requested
     if table:
@@ -200,6 +527,119 @@ def analyze(ctx, table: Optional[str]):
         table_summary.add_row("Node Balance Score", f"{stats.node_balance_score:.1f}/100")
 
         console.print(table_summary)
+
+    # Show largest tables if requested
+    if largest:
+        console.print()
+        largest_tables = analyzer.get_table_size_breakdown(limit=largest, order='largest')
+        
+        largest_table = Table(title=f"Largest Tables/Partitions by Size (Top {largest})", box=box.ROUNDED)
+        largest_table.add_column("Table", style="cyan")
+        largest_table.add_column("Partition", style="magenta")
+        largest_table.add_column("Shards", justify="right", style="yellow")
+        largest_table.add_column("P/R", justify="right", style="blue")
+        largest_table.add_column("Min Size", justify="right", style="green")
+        largest_table.add_column("Avg Size", justify="right", style="bright_green")
+        largest_table.add_column("Max Size", justify="right", style="red")
+        largest_table.add_column("Total Size", justify="right", style="bright_red")
+        
+        for entry in largest_tables:
+            table_name = entry['table_name']
+            partition = entry['partition']
+            total_shards = entry['total_shards']
+            primary_count = entry['primary_count']
+            replica_count = entry['replica_count']
+            min_size = entry['min_size']
+            avg_size = entry['avg_size']
+            max_size = entry['max_size']
+            total_size = entry['total_size']
+            
+            largest_table.add_row(
+                table_name,
+                partition,
+                str(total_shards),
+                f"{primary_count}P/{replica_count}R",
+                f"{min_size:.1f}GB",
+                f"{avg_size:.1f}GB", 
+                f"{max_size:.1f}GB",
+                f"{total_size:.1f}GB"
+            )
+        
+        console.print(largest_table)
+        
+        # Add summary stats
+        total_largest_size = sum(entry['total_size'] for entry in largest_tables)
+        total_largest_shards = sum(entry['total_shards'] for entry in largest_tables)
+        
+        console.print()
+        console.print(f"[dim]📊 Summary: {total_largest_shards} total shards using {total_largest_size:.1f}GB across {len(largest_tables)} largest table/partition(s)[/dim]")
+
+    # Show smallest tables if requested
+    if smallest:
+        console.print()
+        all_smallest = analyzer.get_table_size_breakdown(limit=None, order='smallest')
+        
+        # Filter based on no_zero_size flag
+        if no_zero_size:
+            # Use tolerance for effectively zero-sized tables (handles display formatting)
+            # Since display uses {size:.1f}GB format, anything < 0.05GB displays as 0.0GB
+            zero_tolerance = 0.05  # Consider anything that displays as 0.0GB as effectively zero
+            
+            # Count effectively zero-sized tables
+            zero_sized_count = len([t for t in all_smallest if t['total_size'] < zero_tolerance])
+            # Filter out effectively zero-sized tables and take the requested number
+            non_zero_tables = [t for t in all_smallest if t['total_size'] >= zero_tolerance]
+            smallest_tables = non_zero_tables[:smallest]
+            
+            if zero_sized_count > 0:
+                console.print(f"[dim]ℹ️  Found {zero_sized_count} table/partition(s) with 0.0GB size (excluded from results)[/dim]")
+                console.print()
+        else:
+            smallest_tables = all_smallest[:smallest]
+        
+        smallest_table = Table(title=f"Smallest Tables/Partitions by Size (Top {len(smallest_tables)})", box=box.ROUNDED)
+        smallest_table.add_column("Table", style="cyan")
+        smallest_table.add_column("Partition", style="magenta")
+        smallest_table.add_column("Shards", justify="right", style="yellow")
+        smallest_table.add_column("P/R", justify="right", style="blue")
+        smallest_table.add_column("Min Size", justify="right", style="green")
+        smallest_table.add_column("Avg Size", justify="right", style="bright_green")
+        smallest_table.add_column("Max Size", justify="right", style="red")
+        smallest_table.add_column("Total Size", justify="right", style="bright_red")
+        
+        for entry in smallest_tables:
+            table_name = entry['table_name']
+            partition = entry['partition']
+            total_shards = entry['total_shards']
+            primary_count = entry['primary_count']
+            replica_count = entry['replica_count']
+            min_size = entry['min_size']
+            avg_size = entry['avg_size']
+            max_size = entry['max_size']
+            total_size = entry['total_size']
+            
+            smallest_table.add_row(
+                table_name,
+                partition,
+                str(total_shards),
+                f"{primary_count}P/{replica_count}R",
+                f"{min_size:.1f}GB",
+                f"{avg_size:.1f}GB", 
+                f"{max_size:.1f}GB",
+                f"{total_size:.1f}GB"
+            )
+        
+        console.print(smallest_table)
+        
+        # Add summary stats
+        total_smallest_size = sum(entry['total_size'] for entry in smallest_tables)
+        total_smallest_shards = sum(entry['total_shards'] for entry in smallest_tables)
+        
+        console.print()
+        if no_zero_size and len([t for t in all_smallest if t['total_size'] < 0.05]) > 0:
+            console.print(f"[dim]📊 Summary: {total_smallest_shards} total shards using {total_smallest_size:.3f}GB across {len(smallest_tables)} smallest non-zero table/partition(s)[/dim]")
+        else:
+            console.print(f"[dim]📊 Summary: {total_smallest_shards} total shards using {total_smallest_size:.3f}GB across {len(smallest_tables)} smallest table/partition(s)[/dim]")
 
 
 @main.command()
@@ -1094,6 +1534,7 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                 # Track previous state for change detection
                 previous_recoveries = {}
                 previous_timestamp = None
+                last_transitioning_display = None
                 first_run = True
 
                 while True:
@@ -1118,10 +1559,9 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                         recovery_key = f"{recovery.schema_name}.{recovery.table_name}.{recovery.shard_id}.{recovery.node_name}"
 
                         # Create complete table name
-                        if recovery.schema_name == "doc":
-                            table_display = recovery.table_name
-                        else:
-                            table_display = f"{recovery.schema_name}.{recovery.table_name}"
+                        table_display = format_table_display_with_partition(
+                            recovery.schema_name, recovery.table_name, recovery.partition_values
+                        )
 
                         # Count active vs completed
                         if recovery.stage == "DONE" and recovery.overall_progress >= 100.0:
@@ -1145,9 +1585,17 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                                 translog_info = format_translog_info(recovery)
                                 
                                 if diff > 0:
-                                    changes.append(f"[green]📈[/green] {table_display} S{recovery.shard_id} {recovery.overall_progress:.1f}% (+{diff:.1f}%) {recovery.size_gb:.1f}GB{translog_info}{node_route}")
+                                    table_display = format_table_display_with_partition(
+                                        recovery.schema_name, recovery.table_name, recovery.partition_values
+                                    )
+                                    progress_info = format_recovery_progress(recovery)
+                                    changes.append(f"[green]📈[/green] {table_display} S{recovery.shard_id} {recovery.recovery_type} {progress_info} (+{diff:.1f}%) {recovery.size_gb:.1f}GB{translog_info}{node_route}")
                                 else:
-                                    changes.append(f"[yellow]📉[/yellow] {table_display} S{recovery.shard_id} {recovery.overall_progress:.1f}% ({diff:.1f}%) {recovery.size_gb:.1f}GB{translog_info}{node_route}")
+                                    table_display = format_table_display_with_partition(
+                                        recovery.schema_name, recovery.table_name, recovery.partition_values
+                                    )
+                                    progress_info = format_recovery_progress(recovery)
+                                    changes.append(f"[yellow]📉[/yellow] {table_display} S{recovery.shard_id} {recovery.recovery_type} {progress_info} ({diff:.1f}%) {recovery.size_gb:.1f}GB{translog_info}{node_route}")
                             elif prev['stage'] != recovery.stage:
                                 # Create node route display
                                 node_route = ""
@@ -1159,7 +1607,11 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                                 # Add translog info
                                 translog_info = format_translog_info(recovery)
                                 
-                                changes.append(f"[blue]🔄[/blue] {table_display} S{recovery.shard_id} {prev['stage']}→{recovery.stage} {recovery.size_gb:.1f}GB{translog_info}{node_route}")
+                                table_display = format_table_display_with_partition(
+                                    recovery.schema_name, recovery.table_name, recovery.partition_values
+                                )
+                                progress_info = format_recovery_progress(recovery)
+                                changes.append(f"[blue]🔄[/blue] {table_display} S{recovery.shard_id} {recovery.recovery_type} {prev['stage']}→{recovery.stage} {progress_info} {recovery.size_gb:.1f}GB{translog_info}{node_route}")
                         else:
                             # New recovery - show based on include_transitioning flag or first run
                             if first_run or include_transitioning or (recovery.overall_progress < 100.0 or recovery.stage != "DONE"):
@@ -1174,7 +1626,11 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                                 # Add translog info
                                 translog_info = format_translog_info(recovery)
                                 
-                                changes.append(f"{status_icon} {table_display} S{recovery.shard_id} {recovery.stage} {recovery.overall_progress:.1f}% {recovery.size_gb:.1f}GB{translog_info}{node_route}")
+                                table_display = format_table_display_with_partition(
+                                    recovery.schema_name, recovery.table_name, recovery.partition_values
+                                )
+                                progress_info = format_recovery_progress(recovery)
+                                changes.append(f"{status_icon} {table_display} S{recovery.shard_id} {recovery.recovery_type} {recovery.stage} {progress_info} {recovery.size_gb:.1f}GB{translog_info}{node_route}")
 
                         # Store current state for next comparison
                         previous_recoveries[recovery_key] = {
@@ -1182,29 +1638,108 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                             'stage': recovery.stage
                         }
 
-                    # Always show a status line
-                    if not recoveries:
-                        console.print(f"{current_time} | [green]No recoveries - cluster stable[/green]")
+                    # Get problematic shards for comprehensive status
+                    problematic_shards = recovery_monitor.get_problematic_shards(table, node)
+                    
+                    # Filter out shards that are already being recovered
+                    non_recovering_shards = []
+                    if problematic_shards:
+                        for shard in problematic_shards:
+                            # Check if this shard is already in our recoveries list
+                            is_recovering = any(
+                                r.shard_id == shard['shard_id'] and 
+                                r.table_name == shard['table_name'] and 
+                                r.schema_name == shard['schema_name']
+                                for r in recoveries
+                            )
+                            if not is_recovering:
+                                non_recovering_shards.append(shard)
+                    
+                    # Always show a comprehensive status line
+                    if not recoveries and not non_recovering_shards:
+                        console.print(f"{current_time} | [green]No issues - cluster stable[/green]")
+                        previous_recoveries.clear()
+                    elif not recoveries and non_recovering_shards:
+                        console.print(f"{current_time} | [yellow]{len(non_recovering_shards)} shards need attention (not recovering)[/yellow]")
+                        # Show first few problematic shards
+                        for shard in non_recovering_shards[:5]:
+                            table_display = format_table_display_with_partition(
+                                shard['schema_name'], shard['table_name'], shard.get('partition_values')
+                            )
+                            primary_indicator = "P" if shard.get('primary') else "R"
+                            console.print(f"         | [red]⚠[/red] {table_display} S{shard['shard_id']}{primary_indicator} {shard['state']}")
+                        if len(non_recovering_shards) > 5:
+                            console.print(f"         | [dim]... and {len(non_recovering_shards) - 5} more[/dim]")
                         previous_recoveries.clear()
                     else:
-                        # Build status message
-                        status = ""
+                        # Build status message for active recoveries
+                        status_parts = []
                         if active_count > 0:
-                            status = f"{active_count} active"
+                            status_parts.append(f"{active_count} recovering")
                         if completed_count > 0:
-                            status += f", {completed_count} done" if status else f"{completed_count} done"
+                            status_parts.append(f"{completed_count} done")
+                        if non_recovering_shards:
+                            status_parts.append(f"[yellow]{len(non_recovering_shards)} awaiting recovery[/yellow]")
+                        
+                        status = " | ".join(status_parts)
 
                         # Show status line with changes or periodic update
                         if changes:
                             console.print(f"{current_time} | {status}")
                             for change in changes:
                                 console.print(f"         | {change}")
+                            # Show some problematic shards if there are any
+                            if non_recovering_shards and len(changes) < 3:  # Don't overwhelm the output
+                                for shard in non_recovering_shards[:2]:
+                                    table_display = format_table_display_with_partition(
+                                        shard['schema_name'], shard['table_name'], shard.get('partition_values')
+                                    )
+                                    primary_indicator = "P" if shard.get('primary') else "R"
+                                    console.print(f"         | [red]⚠[/red] {table_display} S{shard['shard_id']}{primary_indicator} {shard['state']}")
                         else:
                             # Show periodic status even without changes
                             if include_transitioning and completed_count > 0:
-                                console.print(f"{current_time} | {status} (transitioning)")
+                                from datetime import datetime, timedelta
+                                current_dt = datetime.now()
+                                
+                                # Show transitioning details every 30 seconds or first time
+                                should_show_details = (
+                                    last_transitioning_display is None or 
+                                    (current_dt - last_transitioning_display).total_seconds() >= 30
+                                )
+                                
+                                if should_show_details:
+                                    console.print(f"{current_time} | {status} (transitioning)")
+                                    # Show details of transitioning recoveries
+                                    transitioning_recoveries = [r for r in recoveries if r.stage == "DONE" and r.overall_progress >= 100.0]
+                                    for recovery in transitioning_recoveries[:5]:  # Limit to first 5 to avoid spam
+                                        # Create node route display
+                                        node_route = ""
+                                        if recovery.recovery_type == "PEER" and recovery.source_node_name:
+                                            node_route = f" {recovery.source_node_name} → {recovery.node_name}"
+                                        elif recovery.recovery_type == "DISK":
+                                            node_route = f" disk → {recovery.node_name}"
+                                        
+                                        # Add translog info
+                                        translog_info = format_translog_info(recovery)
+                                        
+                                        table_display = format_table_display_with_partition(
+                                            recovery.schema_name, recovery.table_name, recovery.partition_values
+                                        )
+                                        progress_info = format_recovery_progress(recovery)
+                                        primary_indicator = "P" if recovery.is_primary else "R"
+                                        console.print(f"         | [cyan]🔄[/cyan] {table_display} S{recovery.shard_id}{primary_indicator} {recovery.recovery_type} {recovery.stage} {progress_info} {recovery.size_gb:.1f}GB{translog_info}{node_route}")
+                                    
+                                    if len(transitioning_recoveries) > 5:
+                                        console.print(f"         | [dim]... and {len(transitioning_recoveries) - 5} more transitioning[/dim]")
+                                    
+                                    last_transitioning_display = current_dt
+                                else:
+                                    console.print(f"{current_time} | {status} (transitioning)")
                             elif active_count > 0:
                                 console.print(f"{current_time} | {status} (no changes)")
+                            elif non_recovering_shards:
+                                console.print(f"{current_time} | {status} (issues persist)")
 
                     previous_timestamp = current_time
                     first_run = False
@@ -1220,26 +1755,55 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                     recovery_type_filter=recovery_type,
                     include_transitioning=include_transitioning
                 )
+                
+                final_problematic_shards = recovery_monitor.get_problematic_shards(table, node)
+                
+                # Filter out shards that are already being recovered
+                final_non_recovering_shards = []
+                if final_problematic_shards:
+                    for shard in final_problematic_shards:
+                        is_recovering = any(
+                            r.shard_id == shard['shard_id'] and 
+                            r.table_name == shard['table_name'] and 
+                            r.schema_name == shard['schema_name']
+                            for r in final_recoveries
+                        )
+                        if not is_recovering:
+                            final_non_recovering_shards.append(shard)
 
-                if final_recoveries:
-                    console.print("\n📊 [bold]Final Recovery Summary:[/bold]")
-                    summary = recovery_monitor.get_recovery_summary(final_recoveries)
+                if final_recoveries or final_non_recovering_shards:
+                    console.print("\n📊 [bold]Final Cluster Status Summary:[/bold]")
+                    
+                    if final_recoveries:
+                        summary = recovery_monitor.get_recovery_summary(final_recoveries)
+                        # Count active vs completed
+                        active_count = len([r for r in final_recoveries if r.overall_progress < 100.0 or r.stage != "DONE"])
+                        completed_count = len(final_recoveries) - active_count
 
-                    # Count active vs completed
-                    active_count = len([r for r in final_recoveries if r.overall_progress < 100.0 or r.stage != "DONE"])
-                    completed_count = len(final_recoveries) - active_count
+                        console.print(f"   Total recoveries: {summary['total_recoveries']}")
+                        console.print(f"   Active: {active_count}, Completed: {completed_count}")
+                        console.print(f"   Total size: {summary['total_size_gb']:.1f} GB")
+                        console.print(f"   Average progress: {summary['avg_progress']:.1f}%")
 
-                    console.print(f"   Total recoveries: {summary['total_recoveries']}")
-                    console.print(f"   Active: {active_count}, Completed: {completed_count}")
-                    console.print(f"   Total size: {summary['total_size_gb']:.1f} GB")
-                    console.print(f"   Average progress: {summary['avg_progress']:.1f}%")
-
-                    if summary['by_type']:
-                        console.print(f"   By recovery type:")
-                        for rec_type, stats in summary['by_type'].items():
-                            console.print(f"     {rec_type}: {stats['count']} recoveries, {stats['avg_progress']:.1f}% avg progress")
+                        if summary['by_type']:
+                            console.print(f"   By recovery type:")
+                            for rec_type, stats in summary['by_type'].items():
+                                console.print(f"     {rec_type}: {stats['count']} recoveries, {stats['avg_progress']:.1f}% avg progress")
+                    
+                    if final_non_recovering_shards:
+                        console.print(f"   [yellow]Problematic shards needing attention: {len(final_non_recovering_shards)}[/yellow]")
+                        # Group by state for summary
+                        by_state = {}
+                        for shard in final_non_recovering_shards:
+                            state = shard['state']
+                            if state not in by_state:
+                                by_state[state] = 0
+                            by_state[state] += 1
+                        
+                        for state, count in by_state.items():
+                            console.print(f"     {state}: {count} shards")
                 else:
-                    console.print("\n[green]✅ No active recoveries at exit[/green]")
+                    console.print("\n[green]✅ Cluster stable - no issues detected[/green]")
 
                 return
 
@@ -1255,18 +1819,58 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
             display_output = recovery_monitor.format_recovery_display(recoveries)
             console.print(display_output)
 
-            if not recoveries:
+            # Get problematic shards for comprehensive status
+            problematic_shards = recovery_monitor.get_problematic_shards(table, node)
+            
+            # Filter out shards that are already being recovered
+            non_recovering_shards = []
+            if problematic_shards:
+                for shard in problematic_shards:
+                    is_recovering = any(
+                        r.shard_id == shard['shard_id'] and 
+                        r.table_name == shard['table_name'] and 
+                        r.schema_name == shard['schema_name']
+                        for r in recoveries
+                    )
+                    if not is_recovering:
+                        non_recovering_shards.append(shard)
+
+            if not recoveries and not non_recovering_shards:
                 if include_transitioning:
-                    console.print("\n[green]✅ No recoveries found (active or transitioning)[/green]")
+                    console.print("\n[green]✅ No issues found - cluster stable[/green]")
                 else:
                     console.print("\n[green]✅ No active recoveries found[/green]")
                     console.print("[dim]💡 Use --include-transitioning to see completed recoveries still transitioning[/dim]")
+            elif not recoveries and non_recovering_shards:
+                console.print(f"\n[yellow]⚠️ {len(non_recovering_shards)} shards need attention (not recovering)[/yellow]")
+                # Group by state for summary
+                by_state = {}
+                for shard in non_recovering_shards:
+                    state = shard['state']
+                    if state not in by_state:
+                        by_state[state] = 0
+                    by_state[state] += 1
+                
+                for state, count in by_state.items():
+                    console.print(f"   {state}: {count} shards")
+                    
+                # Show first few examples
+                console.print(f"\nExamples:")
+                for shard in non_recovering_shards[:5]:
+                    table_display = format_table_display_with_partition(
+                        shard['schema_name'], shard['table_name'], shard.get('partition_values')
+                    )
+                    primary_indicator = "P" if shard.get('primary') else "R"
+                    console.print(f"   [red]⚠[/red] {table_display} S{shard['shard_id']}{primary_indicator} {shard['state']}")
+                    
+                if len(non_recovering_shards) > 5:
+                    console.print(f"   [dim]... and {len(non_recovering_shards) - 5} more[/dim]")
             else:
-                # Show summary
+                # Show recovery summary
                 summary = recovery_monitor.get_recovery_summary(recoveries)
-                console.print(f"\n📊 [bold]Recovery Summary:[/bold]")
-                console.print(f"   Total recoveries: {summary['total_recoveries']}")
-                console.print(f"   Total size: {summary['total_size_gb']:.1f} GB")
+                console.print(f"\n📊 [bold]Cluster Status Summary:[/bold]")
+                console.print(f"   Active recoveries: {summary['total_recoveries']}")
+                console.print(f"   Total recovery size: {summary['total_size_gb']:.1f} GB")
                 console.print(f"   Average progress: {summary['avg_progress']:.1f}%")
 
                 # Show breakdown by type
@@ -1274,6 +1878,19 @@ def monitor_recovery(ctx, table: str, node: str, watch: bool, refresh_interval: 
                     console.print(f"\n   By recovery type:")
                     for rec_type, stats in summary['by_type'].items():
                         console.print(f"     {rec_type}: {stats['count']} recoveries, {stats['avg_progress']:.1f}% avg progress")
+
+                # Show problematic shards if any
+                if non_recovering_shards:
+                    console.print(f"\n   [yellow]Problematic shards needing attention: {len(non_recovering_shards)}[/yellow]")
+                    by_state = {}
+                    for shard in non_recovering_shards:
+                        state = shard['state']
+                        if state not in by_state:
+                            by_state[state] = 0
+                        by_state[state] += 1
+                    
+                    for state, count in by_state.items():
+                        console.print(f"     {state}: {count} shards")
 
                 console.print(f"\n[dim]💡 Use --watch flag for continuous monitoring[/dim]")
 
@@ -1486,6 +2103,915 @@ def shard_distribution(ctx, top_tables: int, table: Optional[str]):
         console.print("\n[yellow]Analysis interrupted by user[/yellow]")
     except Exception as e:
         console.print(f"[red]Error during distribution analysis: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+
+@main.command()
+@click.option('--count', default=10, help='Number of most active shards to show (default: 10)')
+@click.option('--interval', default=30, help='Observation interval in seconds (default: 30)')
+@click.option('--min-checkpoint-delta', default=1000, help='Minimum checkpoint progression between snapshots to show shard (default: 1000)')
+@click.option('--table', '-t', help='Monitor specific table only')
+@click.option('--node', '-n', help='Monitor specific node only')
+@click.option('--watch', '-w', is_flag=True, help='Continuously monitor (refresh every interval)')
+@click.option('--exclude-system', is_flag=True, help='Exclude system tables (gc.*, information_schema.*)')
+@click.option('--min-rate', type=float, help='Minimum activity rate (changes/sec) to show')
+@click.option('--show-replicas/--hide-replicas', default=True, help='Show replica shards (default: True)')
+@click.pass_context
+def active_shards(ctx, count: int, interval: int, min_checkpoint_delta: int, 
+                 table: Optional[str], node: Optional[str], watch: bool,
+                 exclude_system: bool, min_rate: Optional[float], show_replicas: bool):
+    """Monitor most active shards by checkpoint progression
+    
+    This command takes two snapshots of ALL started shards separated by the
+    observation interval, then shows the shards with the highest checkpoint
+    progression (activity) between the snapshots.
+    
+    Unlike other commands, this tracks ALL shards and filters based on actual
+    activity between snapshots, not current state. This captures shards that
+    become active during the observation period.
+    
+    Useful for identifying which shards are receiving the most write activity
+    in your cluster and understanding write patterns.
+    
+    Examples:
+        xmover active-shards --count 20 --interval 60        # Top 20 over 60 seconds
+        xmover active-shards --watch --interval 30           # Continuous monitoring
+        xmover active-shards --table my_table --watch        # Monitor specific table
+        xmover active-shards --node data-hot-1 --count 5     # Top 5 on specific node
+        xmover active-shards --min-checkpoint-delta 500      # Lower activity threshold
+        xmover active-shards --exclude-system --min-rate 50  # Skip system tables, min 50/sec
+        xmover active-shards --hide-replicas --count 20      # Only primary shards
+    """
+    client = ctx.obj['client']
+    monitor = ActiveShardMonitor(client)
+    
+    def get_filtered_snapshot():
+        """Get snapshot with optional filtering"""
+        snapshots = client.get_active_shards_snapshot(min_checkpoint_delta=min_checkpoint_delta)
+        
+        # Apply table filter if specified
+        if table:
+            snapshots = [s for s in snapshots if s.table_name == table or 
+                        f"{s.schema_name}.{s.table_name}" == table]
+        
+        # Apply node filter if specified  
+        if node:
+            snapshots = [s for s in snapshots if s.node_name == node]
+        
+        # Exclude system tables if requested
+        if exclude_system:
+            snapshots = [s for s in snapshots if not (
+                s.schema_name.startswith('gc.') or 
+                s.schema_name == 'information_schema' or
+                s.schema_name == 'sys' or
+                s.table_name.endswith('_events') or
+                s.table_name.endswith('_log')
+            )]
+            
+        return snapshots
+    
+    def run_single_analysis():
+        """Run a single analysis cycle"""
+        if not watch:
+            console.print(Panel.fit("[bold blue]Active Shards Monitor[/bold blue]"))
+        
+        # Show configuration - simplified for watch mode
+        if watch:
+            config_parts = [f"{interval}s interval", f"threshold: {min_checkpoint_delta:,}", f"top {count}"]
+            if table:
+                config_parts.append(f"table: {table}")
+            if node:
+                config_parts.append(f"node: {node}")
+            console.print(f"[dim]{' | '.join(config_parts)}[/dim]")
+        else:
+            config_info = [
+                f"Observation interval: {interval}s",
+                f"Min checkpoint delta: {min_checkpoint_delta:,}",
+                f"Show count: {count}"
+            ]
+            if table:
+                config_info.append(f"Table filter: {table}")
+            if node:
+                config_info.append(f"Node filter: {node}")
+            if exclude_system:
+                config_info.append("Excluding system tables")
+            if min_rate:
+                config_info.append(f"Min rate: {min_rate}/sec")
+            if not show_replicas:
+                config_info.append("Primary shards only")
+                
+            console.print("[dim]" + " | ".join(config_info) + "[/dim]")
+        console.print()
+        
+        # Take first snapshot
+        if not watch:
+            console.print("📷 Taking first snapshot...")
+        snapshot1 = get_filtered_snapshot()
+        
+        if not snapshot1:
+            console.print("[yellow]No started shards found matching criteria[/yellow]")
+            return
+            
+        if not watch:
+            console.print(f"   Tracking {len(snapshot1)} started shards for activity")
+            console.print(f"⏱️  Waiting {interval} seconds for activity...")
+        
+        # Wait for observation interval
+        if watch:
+            # Simplified countdown for watch mode
+            for remaining in range(interval, 0, -1):
+                if remaining % 5 == 0 or remaining <= 3:  # Show fewer updates
+                    console.print(f"[dim]⏱️  {remaining}s...[/dim]", end="\r")
+                time.sleep(1)
+            console.print(" " * 15, end="\r")  # Clear countdown
+        else:
+            time.sleep(interval)
+        
+        # Take second snapshot
+        if not watch:
+            console.print("📷 Taking second snapshot...")
+        snapshot2 = get_filtered_snapshot()
+        
+        if not snapshot2:
+            console.print("[yellow]No started shards found in second snapshot[/yellow]")
+            return
+            
+        if not watch:
+            console.print(f"   Tracking {len(snapshot2)} started shards for activity")
+        
+        # Compare snapshots and show results
+        activities = monitor.compare_snapshots(snapshot1, snapshot2, min_activity_threshold=min_checkpoint_delta)
+        
+        # Apply additional filters
+        if not show_replicas:
+            activities = [a for a in activities if a.is_primary]
+        
+        if min_rate:
+            activities = [a for a in activities if a.activity_rate >= min_rate]
+        
+        if not activities:
+            console.print(f"[green]✅ No shards exceeded activity threshold ({min_checkpoint_delta:,} checkpoint changes)[/green]")
+            if min_rate:
+                console.print(f"[dim]Also filtered by minimum rate: {min_rate}/sec[/dim]")
+        else:
+            if not watch:
+                overlap_count = len(set(s.shard_identifier for s in snapshot1) & 
+                               set(s.shard_identifier for s in snapshot2))
+                console.print(f"[dim]Analyzed {overlap_count} shards present in both snapshots[/dim]")
+            console.print(monitor.format_activity_display(activities, show_count=count, watch_mode=watch))
+    
+    try:
+        if watch:
+            console.print("[dim]Press Ctrl+C to stop monitoring[/dim]")
+            console.print()
+            
+            while True:
+                run_single_analysis()
+                if watch:
+                    console.print(f"\n[dim]━━━ Next update in {interval}s ━━━[/dim]\n")
+                time.sleep(interval)
+        else:
+            run_single_analysis()
+            
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Monitoring stopped by user[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error during active shards monitoring: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+
+@main.command()
+@click.option('--sizeMB', default=300, help='Minimum translog uncommitted size in MB (default: 300)')
+@click.option('--execute', is_flag=True, help='Execute the replica commands after confirmation')
+@click.pass_context
+def problematic_translogs(ctx, sizemb: int, execute: bool):
+    """Find tables with problematic translog sizes and generate comprehensive shard management commands
+    
+    This command identifies tables with replica shards that have large uncommitted translog sizes
+    indicating replication issues. It generates a complete sequence including:
+    1. Stop automatic shard rebalancing
+    2. REROUTE CANCEL commands for problematic shards  
+    3. Set replicas to 0 commands
+    4. Retention lease queries for monitoring
+    5. Set replicas to 1 commands (restored from original values)
+    6. Re-enable automatic shard rebalancing
+    With --execute, it runs them after confirmation.
+    """
+    client = ctx.obj['client']
+    
+    console.print(Panel.fit("[bold blue]Problematic Translog Analysis[/bold blue]"))
+    console.print(f"[dim]Looking for tables with replica shards having translog uncommitted size > {sizemb}MB[/dim]")
+    console.print()
+    
+    # First query to get individual problematic shards for REROUTE CANCEL commands
+    individual_shards_query = """
+        SELECT
+            sh.schema_name,
+            sh.table_name,
+            translate(p.values::text, ':{}', '=()') as partition_values,
+            sh.id AS shard_id,
+            node['name'] AS node_name,
+            sh.translog_stats['uncommitted_size'] / 1024^2 AS translog_uncommitted_mb
+        FROM
+            sys.shards AS sh
+        LEFT JOIN information_schema.table_partitions p
+            ON sh.table_name = p.table_name
+            AND sh.schema_name = p.table_schema
+            AND sh.partition_ident = p.partition_ident
+        WHERE
+            sh.state = 'STARTED'
+            AND sh.translog_stats['uncommitted_size'] > ? * 1024^2
+            AND primary=FALSE
+        ORDER BY
+            translog_uncommitted_mb DESC
+    """
+    
+    # Query to find tables with problematic replica shards, grouped by table/partition
+    summary_query = """
+        SELECT
+            all_shards.schema_name,
+            all_shards.table_name,
+            translate(p.values::text, ':{}', '=()') as partition_values,
+            p.partition_ident,
+            COUNT(CASE WHEN all_shards.primary=FALSE AND all_shards.translog_stats['uncommitted_size'] > ? * 1024^2 THEN 1 END) as problematic_replica_shards,
+            MAX(CASE WHEN all_shards.primary=FALSE AND all_shards.translog_stats['uncommitted_size'] > ? * 1024^2 THEN all_shards.translog_stats['uncommitted_size'] / 1024^2 END) AS max_translog_uncommitted_mb,
+            COUNT(CASE WHEN all_shards.primary=TRUE THEN 1 END) as total_primary_shards,
+            COUNT(CASE WHEN all_shards.primary=FALSE THEN 1 END) as total_replica_shards,
+            SUM(CASE WHEN all_shards.primary=TRUE THEN all_shards.size / 1024^3 ELSE 0 END) as total_primary_size_gb,
+            SUM(CASE WHEN all_shards.primary=FALSE THEN all_shards.size / 1024^3 ELSE 0 END) as total_replica_size_gb
+        FROM
+            sys.shards AS all_shards
+        LEFT JOIN information_schema.table_partitions p
+            ON all_shards.table_name = p.table_name
+            AND all_shards.schema_name = p.table_schema
+            AND all_shards.partition_ident = p.partition_ident
+        WHERE
+            all_shards.state = 'STARTED'
+            AND all_shards.schema_name || '.' || all_shards.table_name || COALESCE(all_shards.partition_ident, '') IN (
+                SELECT DISTINCT sh.schema_name || '.' || sh.table_name || COALESCE(sh.partition_ident, '')
+                FROM sys.shards AS sh
+                WHERE sh.state = 'STARTED'
+                AND sh.translog_stats['uncommitted_size'] > ? * 1024^2
+                AND sh.primary=FALSE
+            )
+        GROUP BY
+            all_shards.schema_name, all_shards.table_name, partition_values, p.partition_ident
+        ORDER BY
+            max_translog_uncommitted_mb DESC
+    """
+    
+    try:
+        # Get individual shards first
+        individual_result = client.execute_query(individual_shards_query, [sizemb])
+        individual_shards = individual_result.get('rows', [])
+        
+        # Get summary data
+        summary_result = client.execute_query(summary_query, [sizemb, sizemb, sizemb])
+        summary_rows = summary_result.get('rows', [])
+        
+        if not individual_shards:
+            console.print(f"[green]✓ No tables found with replica shards having translog uncommitted size > {sizemb}MB[/green]")
+            return
+        
+        # Display individual problematic shards first
+        console.print(f"[bold]Problematic Replica Shards (translog > {sizemb}MB)[/bold]")
+        from rich.table import Table
+        individual_table = Table(box=box.ROUNDED)
+        individual_table.add_column("Schema", style="cyan")
+        individual_table.add_column("Table", style="blue")
+        individual_table.add_column("Partition", style="magenta")
+        individual_table.add_column("Shard ID", justify="right", style="yellow")
+        individual_table.add_column("Node", style="green")
+        individual_table.add_column("Translog MB", justify="right", style="red")
+        
+        for row in individual_shards:
+            schema_name, table_name, partition_values, shard_id, node_name, translog_mb = row
+            partition_display = partition_values if partition_values and partition_values != 'NULL' else "none"
+            
+            individual_table.add_row(
+                schema_name,
+                table_name,
+                partition_display,
+                str(shard_id),
+                node_name,
+                f"{translog_mb:.1f}"
+            )
+        
+        console.print(individual_table)
+        console.print()
+        
+        console.print(f"Found {len(summary_rows)} table/partition(s) with problematic translogs:")
+        console.print()
+        
+        # Display summary table
+        results_table = Table(title=f"Tables with Problematic Replicas (translog > {sizemb}MB)", box=box.ROUNDED)
+        results_table.add_column("Schema", style="cyan")
+        results_table.add_column("Table", style="blue")  
+        results_table.add_column("Partition", style="magenta")
+        results_table.add_column("Problematic Replicas", justify="right", style="yellow")
+        results_table.add_column("Max Translog MB", justify="right", style="red")
+        results_table.add_column("Shards (P/R)", justify="right", style="blue")
+        results_table.add_column("Size GB (P/R)", justify="right", style="bright_blue")
+        results_table.add_column("Current Replicas", justify="right", style="green")
+        
+        # Collect table/partition info and look up current replica counts
+        table_replica_info = []
+        for row in summary_rows:
+            schema_name, table_name, partition_values, partition_ident, problematic_replica_shards, max_translog_mb, total_primary_shards, total_replica_shards, total_primary_size_gb, total_replica_size_gb = row
+            partition_display = partition_values if partition_values and partition_values != 'NULL' else "[dim]none[/dim]"
+            
+            # Look up current replica count
+            current_replicas = 0
+            try:
+                if partition_values and partition_values != 'NULL':
+                    # Partitioned table query
+                    replica_query = """
+                        SELECT number_of_replicas
+                        FROM information_schema.table_partitions
+                        WHERE table_name = ? AND table_schema = ? AND partition_ident = ?
+                    """
+                    replica_result = client.execute_query(replica_query, [table_name, schema_name, partition_ident])
+                else:
+                    # Non-partitioned table query
+                    replica_query = """
+                        SELECT number_of_replicas
+                        FROM information_schema.tables
+                        WHERE table_name = ? AND table_schema = ?
+                    """
+                    replica_result = client.execute_query(replica_query, [table_name, schema_name])
+                
+                replica_rows = replica_result.get('rows', [])
+                if replica_rows:
+                    current_replicas = replica_rows[0][0]
+            except Exception as e:
+                console.print(f"[yellow]Warning: Could not retrieve replica count for {schema_name}.{table_name}: {e}[/yellow]")
+                current_replicas = "unknown"
+            
+            table_replica_info.append((
+                schema_name, table_name, partition_values, partition_ident, 
+                problematic_replica_shards, max_translog_mb, total_primary_shards, total_replica_shards, 
+                total_primary_size_gb, total_replica_size_gb, current_replicas
+            ))
+            
+            results_table.add_row(
+                schema_name,
+                table_name,
+                partition_display,
+                str(problematic_replica_shards),
+                f"{max_translog_mb:.1f}",
+                f"{total_primary_shards}P/{total_replica_shards}R",
+                f"{total_primary_size_gb:.1f}/{total_replica_size_gb:.1f}",
+                str(current_replicas)
+            )
+        
+        console.print(results_table)
+        console.print()
+        console.print("[bold]Generated Comprehensive Shard Management Commands:[/bold]")
+        console.print()
+        
+        # 1. Stop automatic shard rebalancing
+        console.print("[bold cyan]1. Stop Automatic Shard Rebalancing:[/bold cyan]")
+        rebalance_disable_cmd = 'SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"=\'none\';'
+        console.print(rebalance_disable_cmd)
+        console.print()
+        
+        # 2. Generate REROUTE CANCEL SHARD commands for individual shards (unchanged)
+        console.print("[bold cyan]2. REROUTE CANCEL Commands (unchanged from original):[/bold cyan]")
+        reroute_commands = []
+        for row in individual_shards:
+            schema_name, table_name, partition_values, shard_id, node_name, translog_mb = row
+            cmd = f'ALTER TABLE "{schema_name}"."{table_name}" REROUTE CANCEL SHARD {shard_id} on \'{node_name}\' WITH (allow_primary=False);'
+            reroute_commands.append(cmd)
+            console.print(cmd)
+        
+        if reroute_commands:
+            console.print()
+        
+        # 3. Generate ALTER commands to set replicas to 0
+        console.print("[bold cyan]3. Set Replicas to 0:[/bold cyan]")
+        set_zero_commands = []
+        valid_table_info = []
+        
+        for info in table_replica_info:
+            schema_name, table_name, partition_values, partition_ident, problematic_replica_shards, max_translog_mb, total_primary_shards, total_replica_shards, total_primary_size_gb, total_replica_size_gb, current_replicas = info
+            
+            if current_replicas == "unknown":
+                console.print(f"[yellow]-- Skipping {schema_name}.{table_name} (unknown replica count)[/yellow]")
+                continue
+                
+            if current_replicas == 0:
+                console.print(f"[yellow]-- Skipping {schema_name}.{table_name} (already has 0 replicas)[/yellow]")
+                continue
+            
+            valid_table_info.append(info)
+            
+            # Build the ALTER command to set replicas to 0
+            if partition_values and partition_values != 'NULL':
+                # Partitioned table commands
+                cmd_set_zero = f'ALTER TABLE "{schema_name}"."{table_name}" PARTITION {partition_values} SET ("number_of_replicas" = 0);'
+            else:
+                # Non-partitioned table commands
+                cmd_set_zero = f'ALTER TABLE "{schema_name}"."{table_name}" SET ("number_of_replicas" = 0);'
+            
+            set_zero_commands.append(cmd_set_zero)
+            console.print(cmd_set_zero)
+        
+        console.print()
+        
+        # 4. Generate retention lease queries for monitoring
+        console.print("[bold cyan]4. Retention Lease Monitoring Queries:[/bold cyan]")
+        retention_queries = []
+        
+        for info in valid_table_info:
+            schema_name, table_name, partition_values, partition_ident, problematic_replica_shards, max_translog_mb, total_primary_shards, total_replica_shards, total_primary_size_gb, total_replica_size_gb, current_replicas = info
+            
+            if partition_values and partition_values != 'NULL':
+                # For partitioned tables, we need to resolve the partition_ident
+                # First, get all partition_idents for this table
+                partition_query = f"""SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id 
+FROM sys.shards 
+WHERE table_name = '{table_name}' 
+  AND schema_name = '{schema_name}'
+  AND partition_ident = '{partition_ident}' 
+ORDER BY array_length(retention_leases['leases'], 1);"""
+            else:
+                # For non-partitioned tables
+                partition_query = f"""SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id 
+FROM sys.shards 
+WHERE table_name = '{table_name}' 
+  AND schema_name = '{schema_name}'
+ORDER BY array_length(retention_leases['leases'], 1);"""
+            
+            retention_queries.append(partition_query)
+            console.print(f"-- For {schema_name}.{table_name}:")
+            console.print(partition_query)
+            console.print()
+        
+        # 5. Generate ALTER commands to set replicas to 1 (or original value)
+        console.print("[bold cyan]5. Restore Replicas to Original Values:[/bold cyan]")
+        restore_commands = []
+        
+        for info in valid_table_info:
+            schema_name, table_name, partition_values, partition_ident, problematic_replica_shards, max_translog_mb, total_primary_shards, total_replica_shards, total_primary_size_gb, total_replica_size_gb, current_replicas = info
+            
+            # Build the ALTER command to restore replicas
+            if partition_values and partition_values != 'NULL':
+                # Partitioned table commands
+                cmd_restore = f'ALTER TABLE "{schema_name}"."{table_name}" PARTITION {partition_values} SET ("number_of_replicas" = {current_replicas});'
+            else:
+                # Non-partitioned table commands
+                cmd_restore = f'ALTER TABLE "{schema_name}"."{table_name}" SET ("number_of_replicas" = {current_replicas});'
+            
+            restore_commands.append(cmd_restore)
+            console.print(cmd_restore)
+        
+        console.print()
+        
+        # 6. Re-enable automatic shard rebalancing
+        console.print("[bold cyan]6. Re-enable Automatic Shard Rebalancing:[/bold cyan]")
+        rebalance_enable_cmd = 'SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"=\'all\';'
+        console.print(rebalance_enable_cmd)
+        console.print()
+        
+        # Collect all commands for execution
+        all_commands = [rebalance_disable_cmd] + reroute_commands + set_zero_commands + restore_commands + [rebalance_enable_cmd]
+        
+        if not all_commands:
+            console.print("[yellow]No ALTER commands generated[/yellow]")
+            return
+            
+        console.print(f"[bold]Total Commands:[/bold]")
+        console.print(f"  • 1 rebalancing disable command")
+        console.print(f"  • {len(reroute_commands)} REROUTE CANCEL commands")
+        console.print(f"  • {len(set_zero_commands)} set replicas to 0 commands")
+        console.print(f"  • {len(retention_queries)} retention lease queries (for monitoring)")
+        console.print(f"  • {len(restore_commands)} restore replicas commands")
+        console.print(f"  • 1 rebalancing enable command")
+        
+        if execute and all_commands:
+            console.print()
+            console.print("[yellow]⚠️  WARNING: This will execute the complete shard management sequence![/yellow]")
+            console.print("[yellow]This includes disabling rebalancing, canceling problematic shards,")
+            console.print("setting replicas to 0, restoring replicas, and re-enabling rebalancing.[/yellow]")
+            console.print("[yellow]Retention lease queries will be displayed but not executed.[/yellow]")
+            console.print()
+            
+            if click.confirm("Execute all commands with individual confirmation for each?"):
+                console.print()
+                console.print("[bold blue]Executing comprehensive shard management sequence...[/bold blue]")
+                
+                executed = 0
+                failed = 0
+                cmd_num = 0
+                
+                # 1. Execute rebalancing disable command
+                cmd_num += 1
+                console.print(f"[bold]Step 1: Disable Rebalancing[/bold]")
+                console.print(f"[dim]Command {cmd_num}: {rebalance_disable_cmd}[/dim]")
+                if click.confirm(f"Execute rebalancing disable command?"):
+                    try:
+                        client.execute_query(rebalance_disable_cmd)
+                        console.print(f"[green]✓ Command {cmd_num} executed successfully[/green]")
+                        executed += 1
+                    except Exception as e:
+                        console.print(f"[red]✗ Command {cmd_num} failed: {e}[/red]")
+                        failed += 1
+                else:
+                    console.print(f"[yellow]Command {cmd_num} skipped[/yellow]")
+                console.print()
+                
+                # 2. Execute REROUTE CANCEL commands
+                if reroute_commands:
+                    console.print(f"[bold]Step 2: Execute REROUTE CANCEL Commands[/bold]")
+                    for cmd in reroute_commands:
+                        cmd_num += 1
+                        console.print(f"[dim]Command {cmd_num}: {cmd}[/dim]")
+                        if click.confirm(f"Execute this REROUTE CANCEL command?"):
+                            try:
+                                client.execute_query(cmd)
+                                console.print(f"[green]✓ Command {cmd_num} executed successfully[/green]")
+                                executed += 1
+                            except Exception as e:
+                                console.print(f"[red]✗ Command {cmd_num} failed: {e}[/red]")
+                                failed += 1
+                        else:
+                            console.print(f"[yellow]Command {cmd_num} skipped[/yellow]")
+                    console.print()
+                
+                # 3. Execute set replicas to 0 commands
+                if set_zero_commands:
+                    console.print(f"[bold]Step 3: Set Replicas to 0[/bold]")
+                    for cmd in set_zero_commands:
+                        cmd_num += 1
+                        console.print(f"[dim]Command {cmd_num}: {cmd}[/dim]")
+                        if click.confirm(f"Execute this SET replicas to 0 command?"):
+                            try:
+                                client.execute_query(cmd)
+                                console.print(f"[green]✓ Command {cmd_num} executed successfully[/green]")
+                                executed += 1
+                            except Exception as e:
+                                console.print(f"[red]✗ Command {cmd_num} failed: {e}[/red]")
+                                failed += 1
+                        else:
+                            console.print(f"[yellow]Command {cmd_num} skipped[/yellow]")
+                    console.print()
+                
+                # 4. Display retention lease queries (not executed)
+                if retention_queries:
+                    console.print(f"[bold]Step 4: Retention Lease Monitoring Queries (for reference)[/bold]")
+                    console.print("[dim]These queries are for monitoring purposes and will not be executed:[/dim]")
+                    for i, query in enumerate(retention_queries, 1):
+                        console.print(f"[dim]Query {i}:[/dim]")
+                        console.print(f"[dim]{query}[/dim]")
+                    console.print()
+                
+                # 5. Execute restore replicas commands
+                if restore_commands:
+                    console.print(f"[bold]Step 5: Restore Replicas to Original Values[/bold]")
+                    for cmd in restore_commands:
+                        cmd_num += 1
+                        console.print(f"[dim]Command {cmd_num}: {cmd}[/dim]")
+                        if click.confirm(f"Execute this RESTORE replicas command?"):
+                            try:
+                                client.execute_query(cmd)
+                                console.print(f"[green]✓ Command {cmd_num} executed successfully[/green]")
+                                executed += 1
+                            except Exception as e:
+                                console.print(f"[red]✗ Command {cmd_num} failed: {e}[/red]")
+                                failed += 1
+                        else:
+                            console.print(f"[yellow]Command {cmd_num} skipped[/yellow]")
+                    console.print()
+                
+                # 6. Execute rebalancing enable command
+                cmd_num += 1
+                console.print(f"[bold]Step 6: Re-enable Rebalancing[/bold]")
+                console.print(f"[dim]Command {cmd_num}: {rebalance_enable_cmd}[/dim]")
+                if click.confirm(f"Execute rebalancing enable command?"):
+                    try:
+                        client.execute_query(rebalance_enable_cmd)
+                        console.print(f"[green]✓ Command {cmd_num} executed successfully[/green]")
+                        executed += 1
+                    except Exception as e:
+                        console.print(f"[red]✗ Command {cmd_num} failed: {e}[/red]")
+                        failed += 1
+                else:
+                    console.print(f"[yellow]Command {cmd_num} skipped[/yellow]")
+                console.print()
+                
+                console.print(f"[bold]Execution Summary:[/bold]")
+                console.print(f"[green]✓ Successful: {executed}[/green]")
+                if failed > 0:
+                    console.print(f"[red]✗ Failed: {failed}[/red]")
+            else:
+                console.print("[yellow]Operation cancelled by user[/yellow]")
+                
+    except Exception as e:
+        console.print(f"[red]Error analyzing problematic translogs: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+
+@main.command()
+@click.option('--translogsize', default=500, help='Minimum translog uncommitted size threshold in MB (default: 500)')
+@click.option('--interval', default=60, help='Monitoring interval in seconds for watch mode (default: 60)')
+@click.option('--watch', '-w', is_flag=True, help='Continuously monitor (refresh every interval)')
+@click.option('--table', '-t', help='Monitor specific table only')
+@click.option('--node', '-n', help='Monitor specific node only')
+@click.option('--count', default=50, help='Maximum number of shards with large translogs to show (default: 50)')
+@click.pass_context
+def large_translogs(ctx, translogsize: int, interval: int, watch: bool, table: Optional[str], node: Optional[str], count: int):
+    """Monitor shards with large translog uncommitted sizes that do not flush
+    
+    This command identifies shards (both primary and replica) that have large
+    translog uncommitted sizes, indicating they are not flushing properly.
+    Useful for monitoring translog growth and identifying problematic shards.
+    
+    Examples:
+        xmover large-translogs --translogsize 1000            # Shards with >1GB translog
+        xmover large-translogs --watch --interval 30          # Continuous monitoring every 30s
+        xmover large-translogs --table my_table --watch       # Monitor specific table
+        xmover large-translogs --node data-hot-1 --count 20   # Top 20 on specific node
+    """
+    client = ctx.obj['client']
+    
+    def get_large_translog_shards():
+        """Get shards with large translog uncommitted sizes"""
+        query = """
+            SELECT
+                sh.schema_name,
+                sh.table_name,
+                translate(p.values::text, ':{}', '=()') as partition_values,
+                sh.id AS shard_id,
+                node['name'] AS node_name,
+                COALESCE(sh.translog_stats['uncommitted_size'] / 1024^2, 0) AS translog_uncommitted_mb,
+                sh.primary,
+                sh.size / 1024^2 AS shard_size_mb
+            FROM
+                sys.shards AS sh
+            LEFT JOIN information_schema.table_partitions p
+                ON sh.table_name = p.table_name
+                AND sh.schema_name = p.table_schema
+                AND sh.partition_ident = p.partition_ident
+            WHERE
+                sh.state = 'STARTED'
+                AND COALESCE(sh.translog_stats['uncommitted_size'], 0) > ? * 1024^2
+        """
+        
+        params = [translogsize]
+        
+        # Add table filter if specified
+        if table:
+            if '.' in table:
+                schema_name, table_name = table.split('.', 1)
+                query += " AND sh.schema_name = ? AND sh.table_name = ?"
+                params.extend([schema_name, table_name])
+            else:
+                query += " AND sh.table_name = ?"
+                params.append(table)
+        
+        # Add node filter if specified
+        if node:
+            query += " AND node['name'] = ?"
+            params.append(node)
+        
+        query += """
+            ORDER BY
+                COALESCE(sh.translog_stats['uncommitted_size'], 0) DESC
+            LIMIT ?
+        """
+        params.append(count)
+        
+        try:
+            result = client.execute_query(query, params)
+            return result.get('rows', [])
+        except Exception as e:
+            console.print(f"[red]Error querying shards with large translogs: {e}[/red]")
+            return []
+    
+    def display_large_translog_shards(shards_data, show_header=True):
+        """Display the shards with large translogs in a table"""
+        if not shards_data:
+            threshold_display = f"{translogsize}MB" if translogsize < 1000 else f"{translogsize/1000:.1f}GB"
+            console.print(f"[green]✅ No shards found with translog uncommitted size over {threshold_display}[/green]")
+            return
+        
+        # Get current timestamp
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # Create condensed table
+        from rich.table import Table
+        results_table = Table(show_header=show_header, box=box.SIMPLE if watch else box.ROUNDED)
+        if show_header:
+            results_table.add_column("Schema.Table", style="cyan", max_width=50)
+            results_table.add_column("Partition", style="magenta", max_width=30)
+            results_table.add_column("Shard", justify="right", style="yellow", width=5)
+            results_table.add_column("Node", style="green", max_width=12)
+            results_table.add_column("TL MB", justify="right", style="red", width=6)
+            results_table.add_column("Type", justify="center", style="bright_white", width=4)
+        else:
+            results_table.add_column("", style="cyan", max_width=50)
+            results_table.add_column("", style="magenta", max_width=30)
+            results_table.add_column("", justify="right", style="yellow", width=5)
+            results_table.add_column("", style="green", max_width=12)
+            results_table.add_column("", justify="right", style="red", width=6)
+            results_table.add_column("", justify="center", style="bright_white", width=4)
+        
+        for row in shards_data:
+            schema_name, table_name, partition_values, shard_id, node_name, translog_mb, is_primary, shard_size_mb = row
+            
+            # Format table name
+            if schema_name and schema_name != 'doc':
+                table_display = f"{schema_name}.{table_name}"
+            else:
+                table_display = table_name
+            
+            # Format partition
+            if partition_values and partition_values != 'NULL':
+                partition_display = partition_values[:27] + "..." if len(partition_values) > 30 else partition_values
+            else:
+                partition_display = "-"
+            
+            primary_display = "P" if is_primary else "R"
+            
+            # Color code translog based on size
+            if translog_mb > 1000:
+                translog_color = "bright_red"
+            elif translog_mb > 500:
+                translog_color = "red"
+            elif translog_mb > 100:
+                translog_color = "yellow"
+            else:
+                translog_color = "green"
+            
+            results_table.add_row(
+                table_display,
+                partition_display,
+                str(shard_id),
+                node_name,
+                f"[{translog_color}]{translog_mb:.0f}[/{translog_color}]",
+                primary_display
+            )
+        
+        # Show timestamp and summary
+        total_shards = len(shards_data)
+        primary_count = sum(1 for row in shards_data if row[6])  # is_primary is at index 6
+        replica_count = total_shards - primary_count
+        avg_translog = sum(row[5] for row in shards_data) / total_shards if total_shards > 0 else 0  # translog_mb is at index 5
+        
+        if show_header:
+            threshold_display = f"{translogsize}MB" if translogsize < 1000 else f"{translogsize/1000:.1f}GB"
+            console.print(f"[bold blue]Large Translogs (>{threshold_display}) - {timestamp}[/bold blue]")
+        else:
+            console.print(f"[dim]{timestamp}[/dim]")
+            
+        console.print(results_table)
+        console.print(f"[dim]{total_shards} shards ({primary_count}P/{replica_count}R) - Avg translog: {avg_translog:.0f}MB[/dim]")
+    
+    def run_single_analysis():
+        """Run a single analysis cycle"""
+        if not watch:
+            console.print(Panel.fit("[bold blue]Large Translog Monitor[/bold blue]"))
+        
+        # Show configuration
+        threshold_display = f"{translogsize}MB" if translogsize < 1000 else f"{translogsize/1000:.1f}GB"
+        if watch:
+            config_parts = [f"{interval}s", f">{threshold_display}", f"top {count}"]
+            if table:
+                config_parts.append(f"table: {table}")
+            if node:
+                config_parts.append(f"node: {node}")
+            console.print(f"[dim]{' | '.join(config_parts)}[/dim]")
+        else:
+            config_info = [f"Threshold: >{threshold_display}"]
+            if count != 50:
+                config_info.append(f"Limit: {count}")
+            if table:
+                config_info.append(f"Table: {table}")
+            if node:
+                config_info.append(f"Node: {node}")
+                
+            console.print("[dim]" + " | ".join(config_info) + "[/dim]")
+        if not watch:
+            console.print()
+        
+        # Get shards with large translogs
+        shards_data = get_large_translog_shards()
+        
+        # Display results
+        display_large_translog_shards(shards_data, show_header=not watch)
+    
+    try:
+        if watch:
+            console.print("[dim]Press Ctrl+C to stop monitoring[/dim]")
+            console.print()
+            
+            while True:
+                run_single_analysis()
+                if watch:
+                    console.print(f"\n[dim]━━━ Next update in {interval}s ━━━[/dim]\n")
+                time.sleep(interval)
+        else:
+            run_single_analysis()
+            
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Monitoring stopped by user[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error during large translog monitoring: {e}[/red]")
+        import traceback
+        console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+
+@main.command("deep-analyze")
+@click.option('--rules-file', '-r', type=click.Path(exists=True), 
+              help='Path to custom rules YAML file')
+@click.option('--schema', '-s', help='Analyze specific schema only')
+@click.option('--severity', type=click.Choice(['critical', 'warning', 'info']),
+              help='Show only violations of specified severity')
+@click.option('--export-csv', type=click.Path(), 
+              help='Export results to CSV file')
+@click.option('--validate-rules', type=click.Path(exists=True),
+              help='Validate rules file and exit')
+@click.pass_context
+def deep_analyze(ctx, rules_file: Optional[str], schema: Optional[str], 
+                 severity: Optional[str], export_csv: Optional[str],
+                 validate_rules: Optional[str]):
+    """Deep analysis of shard sizes with configurable optimization rules
+    
+    This command analyzes your CrateDB cluster's shard sizes, column counts,
+    and distribution patterns, then applies a comprehensive set of rules to
+    identify optimization opportunities and performance issues.
+    
+    Features:
+    - Cluster configuration analysis (nodes, CPU, memory, heap)
+    - Table and partition shard size analysis
+    - Configurable rule-based recommendations
+    - CSV export for spreadsheet analysis
+    - Custom rules file support
+    
+    Examples:
+    
+        # Run full analysis with default rules
+        xmover deep-analyze
+        
+        # Analyze specific schema only
+        xmover deep-analyze --schema myschema
+        
+        # Show only critical issues
+        xmover deep-analyze --severity critical
+        
+        # Export to spreadsheet
+        xmover deep-analyze --export-csv shard_analysis.csv
+        
+        # Use custom rules
+        xmover deep-analyze --rules-file custom_rules.yaml
+        
+        # Validate rules file
+        xmover deep-analyze --validate-rules custom_rules.yaml
+    """
+    if validate_rules:
+        if validate_rules_file(validate_rules):
+            console.print(f"[green]✅ Rules file {validate_rules} is valid[/green]")
+            sys.exit(0)
+        else:
+            sys.exit(1)
+    
+    try:
+        client = ctx.obj['client']
+        
+        # Initialize monitor with optional custom rules
+        monitor = ShardSizeMonitor(client, rules_file)
+        
+        console.print("[bold blue]🔍 XMover Deep Shard Size Analysis[/bold blue]")
+        console.print("Analyzing cluster configuration and shard distributions...\n")
+        
+        # Run analysis
+        report = monitor.analyze_cluster_shard_sizes(schema_filter=schema)
+        
+        # Display results
+        monitor.display_report(report, severity_filter=severity)
+        
+        # Export CSV if requested
+        if export_csv:
+            monitor.export_csv(report, export_csv)
+            console.print(f"\n[green]📊 Results exported to {export_csv}[/green]")
+        
+        # Summary footer
+        violation_counts = report.total_violations_by_severity
+        total_violations = sum(violation_counts.values())
+        
+        if total_violations > 0:
+            console.print(f"\n[bold]Analysis completed:[/bold] {total_violations} optimization opportunities identified")
+            if violation_counts['critical'] > 0:
+                console.print("[red]⚠️  Critical issues require immediate attention[/red]")
+        else:
+            console.print("\n[bold green]🎉 Excellent! No optimization issues detected[/bold green]")
+            
+    except Exception as e:
+        console.print(f"[red]Error during deep shard size analysis: {e}[/red]")
         import traceback
         console.print(f"[dim]{traceback.format_exc()}[/dim]")
 
