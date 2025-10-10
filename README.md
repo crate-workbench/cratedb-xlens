@@ -15,6 +15,8 @@ A comprehensive Python tool for analyzing CrateDB shard distribution across node
 
 ## Installation
 
+**Note: This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed.**
+
 1. Clone the repository:
 ```bash
 git clone <repository-url>
