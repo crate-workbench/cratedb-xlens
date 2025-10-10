@@ -318,9 +318,9 @@ class ShardSizeMonitor:
         # Get actual max shards per node (current distribution)
         try:
             max_shards_query = """
-            SELECT node['name'], COUNT(*) as shard_count
+            SELECT COALESCE(node['name'], 'unknown-' || COALESCE(node['id'], 'corrupted')), COUNT(*) as shard_count
             FROM sys.shards
-            GROUP BY node['name']
+            GROUP BY COALESCE(node['name'], 'unknown-' || COALESCE(node['id'], 'corrupted'))
             ORDER BY shard_count DESC
             LIMIT 1
             """

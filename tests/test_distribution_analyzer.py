@@ -41,14 +41,14 @@ class TestDistributionAnalyzer:
     def test_get_largest_tables_distribution(self):
         """Test fetching table distribution data"""
         
-        # Mock query results
+        # Mock query results - updated to include partition_ident column
         mock_results = [
-            # schema, table, node, primary_shards, replica_shards, total_shards, total_size, primary_size, replica_size, docs
-            ['doc', 'large_table', 'node1', 5, 2, 7, 100.5, 80.2, 20.3, 1000000],
-            ['doc', 'large_table', 'node2', 4, 3, 7, 95.1, 75.8, 19.3, 950000],
-            ['doc', 'large_table', 'node3', 6, 1, 7, 110.2, 85.9, 24.3, 1100000],
-            ['custom', 'another_table', 'node1', 3, 2, 5, 50.1, 40.2, 9.9, 500000],
-            ['custom', 'another_table', 'node2', 2, 3, 5, 45.8, 35.1, 10.7, 480000],
+            # schema, table, partition_ident, node, primary_shards, replica_shards, total_shards, total_size, primary_size, replica_size, docs
+            ['doc', 'large_table', '', 'node1', 5, 2, 7, 100.5, 80.2, 20.3, 1000000],
+            ['doc', 'large_table', '', 'node2', 4, 3, 7, 95.1, 75.8, 19.3, 950000],
+            ['doc', 'large_table', '', 'node3', 6, 1, 7, 110.2, 85.9, 24.3, 1100000],
+            ['custom', 'another_table', '', 'node1', 3, 2, 5, 50.1, 40.2, 9.9, 500000],
+            ['custom', 'another_table', '', 'node2', 2, 3, 5, 45.8, 35.1, 10.7, 480000],
         ]
         
         self.mock_client.execute_query.return_value = {'rows': mock_results}
@@ -66,11 +66,13 @@ class TestDistributionAnalyzer:
         # Verify table data structure
         large_table = next(d for d in distributions if d.table_name == 'large_table')
         assert large_table.schema_name == 'doc'
+        assert large_table.partition_ident is None or large_table.partition_ident == ''
         assert large_table.full_table_name == 'large_table'  # Should omit 'doc' schema
         assert len(large_table.node_distributions) == 3
         
         another_table = next(d for d in distributions if d.table_name == 'another_table')
         assert another_table.schema_name == 'custom'
+        assert another_table.partition_ident is None or another_table.partition_ident == ''
         assert another_table.full_table_name == 'custom.another_table'
         assert len(another_table.node_distributions) == 2
         
@@ -84,6 +86,7 @@ class TestDistributionAnalyzer:
         imbalanced_table = TableDistribution(
             schema_name='doc',
             table_name='imbalanced_table',
+            partition_ident=None,
             total_primary_size_gb=500.0,
             node_distributions={
                 'node1': {'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5},
@@ -103,11 +106,12 @@ class TestDistributionAnalyzer:
         balanced_table = TableDistribution(
             schema_name='doc',
             table_name='balanced_table',
-            total_primary_size_gb=100.0,
+            partition_ident=None,
+            total_primary_size_gb=300.0,
             node_distributions={
-                'node1': {'total_shards': 8, 'primary_shards': 4, 'replica_shards': 4},
-                'node2': {'total_shards': 8, 'primary_shards': 4, 'replica_shards': 4},
-                'node3': {'total_shards': 8, 'primary_shards': 4, 'replica_shards': 4},
+                'node1': {'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5},
+                'node2': {'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5},
+                'node3': {'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5},
             }
         )
         
@@ -121,11 +125,12 @@ class TestDistributionAnalyzer:
         storage_imbalanced_table = TableDistribution(
             schema_name='doc',
             table_name='storage_imbalanced',
-            total_primary_size_gb=300.0,
+            partition_ident=None,
+            total_primary_size_gb=1000.0,
             node_distributions={
-                'node1': {'total_size_gb': 150.0, 'primary_size_gb': 100.0, 'replica_size_gb': 50.0},
-                'node2': {'total_size_gb': 50.0, 'primary_size_gb': 30.0, 'replica_size_gb': 20.0},
-                'node3': {'total_size_gb': 100.0, 'primary_size_gb': 70.0, 'replica_size_gb': 30.0},
+                'node1': {'total_size_gb': 500.0, 'primary_size_gb': 400.0, 'replica_size_gb': 100.0},
+                'node2': {'total_size_gb': 300.0, 'primary_size_gb': 250.0, 'replica_size_gb': 50.0},
+                'node3': {'total_size_gb': 200.0, 'primary_size_gb': 150.0, 'replica_size_gb': 50.0},
             }
         )
         
@@ -139,10 +144,11 @@ class TestDistributionAnalyzer:
         small_table = TableDistribution(
             schema_name='doc',
             table_name='small_table',
-            total_primary_size_gb=0.1,
+            partition_ident=None,
+            total_primary_size_gb=5.0,  # Small size
             node_distributions={
-                'node1': {'total_size_gb': 0.5, 'primary_size_gb': 0.05, 'replica_size_gb': 0.05},
-                'node2': {'total_size_gb': 0.1, 'primary_size_gb': 0.03, 'replica_size_gb': 0.02},
+                'node1': {'total_size_gb': 25.0, 'primary_size_gb': 15.0, 'replica_size_gb': 10.0},
+                'node2': {'total_size_gb': 25.0, 'primary_size_gb': 15.0, 'replica_size_gb': 10.0},
             }
         )
         
@@ -167,6 +173,7 @@ class TestDistributionAnalyzer:
         limited_coverage_table = TableDistribution(
             schema_name='doc',
             table_name='limited_coverage',
+            partition_ident=None,
             total_primary_size_gb=100.0,  # Significant size
             node_distributions={
                 'node1': {'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5},
@@ -190,6 +197,7 @@ class TestDistributionAnalyzer:
         doc_imbalanced_table = TableDistribution(
             schema_name='doc',
             table_name='doc_imbalanced',
+            partition_ident=None,
             total_primary_size_gb=200.0,
             node_distributions={
                 'node1': {'total_documents': 1000000},  # 1M docs
@@ -208,9 +216,10 @@ class TestDistributionAnalyzer:
         low_doc_table = TableDistribution(
             schema_name='doc',
             table_name='low_docs',
+            partition_ident=None,
             total_primary_size_gb=100.0,
             node_distributions={
-                'node1': {'total_documents': 1000},
+                'node1': {'total_documents': 1000},  # Very low count
                 'node2': {'total_documents': 500},
             }
         )
@@ -225,23 +234,24 @@ class TestDistributionAnalyzer:
         mock_table = TableDistribution(
             schema_name='doc',
             table_name='test_table',
+            partition_ident=None,
             total_primary_size_gb=500.0,
             node_distributions={
                 'node1': {
                     'total_shards': 15, 'primary_shards': 8, 'replica_shards': 7,
                     'total_size_gb': 200.0, 'primary_size_gb': 120.0, 'replica_size_gb': 80.0,
-                    'total_documents': 2000000
-                },
-                'node2': {
-                    'total_shards': 8, 'primary_shards': 4, 'replica_shards': 4,
-                    'total_size_gb': 100.0, 'primary_size_gb': 60.0, 'replica_size_gb': 40.0,
                     'total_documents': 1000000
                 },
-                'node3': {
-                    'total_shards': 5, 'primary_shards': 3, 'replica_shards': 2,
-                    'total_size_gb': 50.0, 'primary_size_gb': 30.0, 'replica_size_gb': 20.0,
+                'node2': {
+                    'total_shards': 10, 'primary_shards': 5, 'replica_shards': 5,
+                    'total_size_gb': 150.0, 'primary_size_gb': 90.0, 'replica_size_gb': 60.0,
                     'total_documents': 500000
                 },
+                'node3': {
+                    'total_shards': 5, 'primary_shards': 2, 'replica_shards': 3,
+                    'total_size_gb': 100.0, 'primary_size_gb': 60.0, 'replica_size_gb': 40.0,
+                    'total_documents': 100000
+                }
             }
         )
         
@@ -275,7 +285,7 @@ class TestDistributionAnalyzer:
         """Test report formatting with anomalies"""
         
         mock_anomaly = DistributionAnomaly(
-            table=TableDistribution('doc', 'test_table', 100.0, {}),
+            table=TableDistribution('doc', 'test_table', None, 100.0, {}),
             anomaly_type='Test Anomaly',
             severity_score=7.5,
             impact_score=8.0,

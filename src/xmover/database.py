@@ -51,10 +51,28 @@ class ShardInfo:
     num_docs: int
     state: str
     routing_state: str
+    partition_ident: Optional[str] = None  # CRITICAL FIX: Add partition support
+    partition_values: Optional[str] = None  # Human-readable partition values
     
     @property
     def shard_type(self) -> str:
         return "PRIMARY" if self.is_primary else "REPLICA"
+    
+    @property
+    def full_table_identifier(self) -> str:
+        """Unique table identifier including partition"""
+        base = f"{self.schema_name}.{self.table_name}" if self.schema_name != "doc" else self.table_name
+        if self.partition_values and self.partition_values.strip():
+            return f"{base}[{self.partition_values}]"
+        elif self.partition_ident and self.partition_ident.strip():
+            return f"{base}[{self.partition_ident}]"
+        else:
+            return base
+    
+    @property
+    def unique_shard_key(self) -> str:
+        """Unique identifier for this specific shard including partition"""
+        return f"{self.full_table_identifier}:shard_{self.shard_id}:{'P' if self.is_primary else 'R'}"
 
 
 @dataclass
@@ -269,36 +287,74 @@ class CrateDBClient:
             raise Exception(f"Failed to execute query: {e}")
     
     def get_nodes_info(self) -> List[NodeInfo]:
-        """Get information about all nodes in the cluster"""
-        query = """
-        SELECT 
-            id,
-            name,
-            attributes['zone'] as zone,
-            heap['used'] as heap_used,
-            heap['max'] as heap_max,
-            fs['total']['size'] as fs_total,
-            fs['total']['used'] as fs_used,
-            fs['total']['available'] as fs_available
-        FROM sys.nodes
-        WHERE name IS NOT NULL
-        ORDER BY name
-        """
-        
-        result = self.execute_query(query)
+        """Get information about all nodes in the cluster with robust error handling"""
         nodes = []
+        nodes_with_missing_metadata = []
         
-        for row in result.get('rows', []):
-            nodes.append(NodeInfo(
-                id=row[0],
-                name=row[1],
-                zone=row[2] or 'unknown',
-                heap_used=row[3] or 0,
-                heap_max=row[4] or 0,
-                fs_total=row[5] or 0,
-                fs_used=row[6] or 0,
-                fs_available=row[7] or 0
-            ))
+        # First, get list of all node names
+        try:
+            name_query = "SELECT id, name FROM sys.nodes WHERE name IS NOT NULL ORDER BY name"
+            name_result = self.execute_query(name_query)
+        except Exception:
+            return nodes
+        
+        # Process each node individually to handle corrupted metadata gracefully
+        for row in name_result.get('rows', []):
+            node_id, node_name = row
+            
+            try:
+                # Try to get full node information
+                detailed_query = """
+                SELECT 
+                    id,
+                    name,
+                    COALESCE(attributes['zone'], 'unknown') as zone,
+                    COALESCE(heap['used'], 0) as heap_used,
+                    COALESCE(heap['max'], 1) as heap_max,
+                    COALESCE(fs['total']['size'], 0) as fs_total,
+                    COALESCE(fs['total']['used'], 0) as fs_used,
+                    COALESCE(fs['total']['available'], 0) as fs_available
+                FROM sys.nodes 
+                WHERE name = ?
+                """
+                
+                detailed_result = self.execute_query(detailed_query, [node_name])
+                
+                if detailed_result.get('rows'):
+                    detail_row = detailed_result['rows'][0]
+                    nodes.append(NodeInfo(
+                        id=detail_row[0],
+                        name=detail_row[1],
+                        zone=detail_row[2] or 'unknown',
+                        heap_used=detail_row[3] or 0,
+                        heap_max=detail_row[4] or 0,
+                        fs_total=detail_row[5] or 0,
+                        fs_used=detail_row[6] or 0,
+                        fs_available=detail_row[7] or 0
+                    ))
+                else:
+                    raise Exception("No detailed data available")
+                    
+            except Exception:
+                # Fallback: create node with default values for corrupted metadata
+                nodes_with_missing_metadata.append(node_name)
+                nodes.append(NodeInfo(
+                    id=node_id,
+                    name=node_name,
+                    zone='unknown',
+                    heap_used=0,
+                    heap_max=1,
+                    fs_total=0,
+                    fs_used=0,
+                    fs_available=0
+                ))
+        
+        # Log nodes with missing metadata if any
+        if nodes_with_missing_metadata:
+            print(f"⚠️  Warning: {len(nodes_with_missing_metadata)} node(s) have corrupted/missing metadata:")
+            for node_name in nodes_with_missing_metadata:
+                print(f"   • {node_name}: Using default values (heap, filesystem, zone data unavailable)")
+            print("   💡 This may indicate node issues - check CrateDB logs for details")
         
         return nodes
     
@@ -346,9 +402,11 @@ class CrateDBClient:
             s.table_name,
             s.schema_name,
             s.id as shard_id,
-            s.node['id'] as node_id,
-            s.node['name'] as node_name,
-            n.attributes['zone'] as zone,
+            s.partition_ident,           -- CRITICAL FIX: Include partition info
+            translate(p.values::text, ':{{{{}}}}', '=()') as partition_values,
+            COALESCE(s.node['id'], 'corrupted') as node_id,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COALESCE(n.attributes['zone'], 'unknown') as zone,
             s."primary" as is_primary,
             s.size as size_bytes,
             s.size / 1024.0^3 as size_gb,
@@ -357,8 +415,12 @@ class CrateDBClient:
             s.routing_state
         FROM sys.shards s
         JOIN sys.nodes n ON s.node['id'] = n.id
+        LEFT JOIN information_schema.table_partitions p 
+            ON s.table_name = p.table_name 
+            AND s.schema_name = p.table_schema 
+            AND s.partition_ident = p.partition_ident
         {where_clause}
-        ORDER BY s.table_name, s.schema_name, s.id, s."primary" DESC
+        ORDER BY s.table_name, s.schema_name, s.partition_ident, s.id, s."primary" DESC
         """
         
         result = self.execute_query(query, parameters)
@@ -369,15 +431,17 @@ class CrateDBClient:
                 table_name=row[0],
                 schema_name=row[1],
                 shard_id=row[2],
-                node_id=row[3],
-                node_name=row[4],
-                zone=row[5] or 'unknown',
-                is_primary=row[6],
-                size_bytes=row[7] or 0,
-                size_gb=float(row[8] or 0),
-                num_docs=row[9] or 0,
-                state=row[10],
-                routing_state=row[11]
+                node_id=row[5],
+                node_name=row[6],
+                zone=row[7] or 'unknown',
+                is_primary=row[8],
+                size_bytes=row[9] or 0,
+                size_gb=float(row[10] or 0),
+                num_docs=row[11] or 0,
+                state=row[12],
+                routing_state=row[13],
+                partition_ident=row[3],       # CRITICAL FIX: Add partition_ident
+                partition_values=row[4]       # Human-readable partition values
             ))
         
         return shards
@@ -398,14 +462,14 @@ class CrateDBClient:
         query = f"""
         SELECT 
             n.attributes['zone'] as zone,
-            s.node['name'] as node_name,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
             CASE WHEN s."primary" = true THEN 'PRIMARY' ELSE 'REPLICA' END as shard_type,
             COUNT(*) as shard_count,
             SUM(s.size) / 1024.0^3 as total_size_gb,
             AVG(s.size) / 1024.0^3 as avg_size_gb
         FROM sys.shards s
-        JOIN sys.nodes n ON s.node['id'] = n.id{where_clause}
-        GROUP BY n.attributes['zone'], s.node['name'], s."primary"
+        JOIN sys.nodes n ON COALESCE(s.node['id'], 'corrupted') = n.id{where_clause}
+        GROUP BY n.attributes['zone'], COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')), s."primary"
         ORDER BY zone, node_name, shard_type DESC
         """
         
@@ -451,6 +515,45 @@ class CrateDBClient:
         
         return summary
     
+    def get_cluster_health_summary(self) -> Optional[dict]:
+        """Get comprehensive cluster health summary with underreplicated shards"""
+        try:
+            query = """
+            SELECT
+                (SELECT health FROM sys.health ORDER BY severity DESC LIMIT 1) AS cluster_health,
+                COUNT(*) FILTER (WHERE health = 'GREEN') AS green_entities,
+                SUM(underreplicated_shards) FILTER (WHERE health = 'GREEN') AS green_underreplicated_shards,
+                COUNT(*) FILTER (WHERE health = 'YELLOW') AS yellow_entities,
+                SUM(underreplicated_shards) FILTER (WHERE health = 'YELLOW') AS yellow_underreplicated_shards,
+                COUNT(*) FILTER (WHERE health = 'RED') AS red_entities,
+                SUM(underreplicated_shards) FILTER (WHERE health = 'RED') AS red_underreplicated_shards,
+                COUNT(*) FILTER (WHERE health NOT IN ('GREEN', 'YELLOW', 'RED')) AS other_entities,
+                SUM(underreplicated_shards) FILTER (WHERE health NOT IN ('GREEN', 'YELLOW', 'RED')) AS other_underreplicated_shards,
+                (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('sys', 'information_schema', 'pg_catalog')) AS total_tables,
+                (SELECT COUNT(*) FROM information_schema.table_partitions) AS total_partitions
+            FROM sys.health
+            """
+            
+            result = self.execute_query(query)
+            if result.get('rows'):
+                row = result['rows'][0]
+                return {
+                    'cluster_health': row[0],
+                    'green_entities': row[1] or 0,
+                    'green_underreplicated_shards': row[2] or 0,
+                    'yellow_entities': row[3] or 0,
+                    'yellow_underreplicated_shards': row[4] or 0,
+                    'red_entities': row[5] or 0,
+                    'red_underreplicated_shards': row[6] or 0,
+                    'other_entities': row[7] or 0,
+                    'other_underreplicated_shards': row[8] or 0,
+                    'total_tables': row[9] or 0,
+                    'total_partitions': row[10] or 0
+                }
+        except Exception:
+            pass
+        return None
+
     def test_connection(self) -> bool:
         """Test the connection to CrateDB"""
         try:
@@ -482,7 +585,21 @@ class CrateDBClient:
         except Exception:
             return {}
     
-    def get_active_recoveries(self, table_name: Optional[str] = None, 
+    def get_master_node_id(self) -> Optional[str]:
+        """Get the current master node ID from sys.cluster"""
+        query = """
+        SELECT master_node FROM sys.cluster
+        """
+        
+        try:
+            result = self.execute_query(query)
+            if result.get('rows') and result['rows'][0][0]:
+                return result['rows'][0][0]
+            return None
+        except Exception:
+            return None
+    
+    def get_active_recoveries(self, table_name: Optional[str] = None,
                             node_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get shards that are currently in recovery states from sys.allocations"""
         
@@ -530,14 +647,15 @@ class CrateDBClient:
         """Get detailed recovery information for a specific shard from sys.shards"""
         
         # Query for shards that are actively recovering (not completed)
+        # Use COALESCE to handle corrupted node metadata that causes 500 errors
         query = """
         SELECT 
             s.table_name,
             s.schema_name,
             translate(p.values::text, ':{}', '=()') as partition_values,
             s.id as shard_id,
-            s.node['name'] as node_name,
-            s.node['id'] as node_id,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COALESCE(s.node['id'], 'corrupted') as node_id,
             s.routing_state,
             s.state,
             s.recovery,
@@ -731,7 +849,7 @@ class CrateDBClient:
         try:
             # First try to find the primary shard of the same table/shard
             query = """
-            SELECT node['name'] as node_name
+            SELECT COALESCE(node['name'], 'unknown-' || COALESCE(node['id'], 'corrupted')) as node_name
             FROM sys.shards
             WHERE schema_name = ? AND table_name = ? AND id = ?
             AND state = 'STARTED' AND node['id'] != ?
@@ -746,7 +864,7 @@ class CrateDBClient:
             
             # If no primary found, look for any started replica
             query_replica = """
-            SELECT node['name'] as node_name
+            SELECT COALESCE(node['name'], 'unknown-' || COALESCE(node['id'], 'corrupted')) as node_name
             FROM sys.shards
             WHERE schema_name = ? AND table_name = ? AND id = ?
             AND state = 'STARTED' AND node['id'] != ?
@@ -782,7 +900,7 @@ class CrateDBClient:
             parameters.append(table_name)
             
         if node_name:
-            where_conditions.append("s.node['name'] = ?")
+            where_conditions.append("COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) = ?")
             parameters.append(node_name)
         
         where_clause = f"WHERE {' AND '.join(where_conditions)}"
@@ -795,8 +913,8 @@ class CrateDBClient:
             s.id as shard_id,
             s.state, 
             s.routing_state, 
-            s.node['name'] as node_name,
-            s.node['id'] as node_id,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COALESCE(s.node['id'], 'corrupted') as node_id,
             s."primary"
         FROM sys.shards s
         LEFT JOIN information_schema.table_partitions p 
@@ -847,7 +965,7 @@ class CrateDBClient:
             sh.table_name,
             sh.id AS shard_id,
             sh."primary",
-            node['name'] as node_name,
+            COALESCE(node['name'], 'unknown-' || COALESCE(node['id'], 'corrupted')) as node_name,
             sh.partition_ident,
             sh.translog_stats['uncommitted_size'] AS translog_uncommitted_bytes,
             sh.seq_no_stats['local_checkpoint'] AS local_checkpoint,
@@ -857,7 +975,7 @@ class CrateDBClient:
         WHERE
             sh.state = 'STARTED'
         ORDER BY
-            sh.schema_name, sh.table_name, sh.id, sh.node['name']
+            sh.schema_name, sh.table_name, sh.id, COALESCE(sh.node['name'], 'unknown-' || COALESCE(sh.node['id'], 'corrupted'))
         """
         
         try:

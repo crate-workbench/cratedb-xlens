@@ -607,3 +607,83 @@ partition_ident          | values                         |
 | 04732dho70ojce9m60o30c1g | {"id_ts_month": 1688169600000} |
 | 04732dho60pj0dpi60o30c1g | {"id_ts_month": 1680307200000} |
 +--------------------------+--------------------------------+
+
+
+## set translog_flush_size
+
+```sql
+SELECT
+      'ALTER TABLE "' || table_schema || '"."' || table_name ||
+      '" PARTITION (id_ts_month = ' || "values"['id_ts_month'] ||
+      ') SET ("translog.flush_threshold_size" = ''2gb'');' AS alter_stmt
+    FROM information_schema.table_partitions
+    WHERE table_schema = 'TURVO'
+      AND table_name = 'shipmentFormFieldData';
+```
+
+## Cluster Health
+
+
+```sql
+
+cr> SELECT
+        (SELECT health FROM sys.health ORDER BY severity DESC LIMIT 1) AS cluster_health,
+        COUNT(*) FILTER (WHERE health = 'GREEN') AS green_entities,
+        COUNT(*) FILTER (WHERE health = 'YELLOW') AS yellow_entities,
+        COUNT(*) FILTER (WHERE health = 'RED') AS red_entities,
+        COUNT(*) FILTER (WHERE health NOT IN ('GREEN', 'YELLOW', 'RED')) AS other_entities,
+        (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('sys', 'information_schema', 'pg_catalog')) AS total_tables,
+        (SELECT COUNT(*) FROM information_schema.table_partitions) AS total_partitions
+    FROM sys.health;
+
++----------------+----------------+-----------------+--------------+----------------+--------------+------------------+
+| cluster_health | green_entities | yellow_entities | red_entities | other_entities | total_tables | total_partitions |
++----------------+----------------+-----------------+--------------+----------------+--------------+------------------+
+| GREEN          |            566 |               0 |            0 |              0 |          590 |              100 |
++----------------+----------------+-----------------+--------------+----------------+--------------+------------------+
+SELECT 1 row in set (0.074 sec)
+
+```
+
+```sql
+
+cr> select * from sys.health;
++--------+----------------+--------------------------+----------+-------------------------------------------------------------+------------------------------------+------------------------+
+| health | missing_shards | partition_ident          | severity | table_name                                                  | table_schema                       | underreplicated_shards |
++--------+----------------+--------------------------+----------+-------------------------------------------------------------+------------------------------------+------------------------+
+| GREEN  |              0 | NULL                     |        1 | temp_filter                                                 | replication_third_filter           |                      0 |
+| GREEN  |              0 | 04732dpm60pj2cpm60o30c1g |        1 | shipmentFormFieldData_events                                | TURVO                              |                      0 |
+| GREEN  |              0 | NULL                     |        1 | shipment_carrier_order_external_id                          | replication_first_materialized     |                      0 |
+| GREEN  |              0 | 04732dhp60s38e1g60o30c1g |        1 | shipmentFormFieldData                                       | TURVO                              |                      0 |
+| GREEN  |              0 | NULL                     |        1 | account_tags                                                | replication_first_materialized     |                      0 |
+```
+
+```sql
+
+cr> SELECT
+        (SELECT health FROM sys.health ORDER BY severity DESC LIMIT 1) AS cluster_health,
+        COUNT(*) FILTER (WHERE health = 'GREEN') AS green_entities,
+        SUM(underreplicated_shards) FILTER (WHERE health = 'GREEN') AS green_underreplicated_shards,
+        COUNT(*) FILTER (WHERE health = 'YELLOW') AS yellow_entities,
+        SUM(underreplicated_shards) FILTER (WHERE health = 'YELLOW') AS yellow_underreplicated_shards,
+        COUNT(*) FILTER (WHERE health = 'RED') AS red_entities,
+        SUM(underreplicated_shards) FILTER (WHERE health = 'RED') AS red_underreplicated_shards,
+        COUNT(*) FILTER (WHERE health NOT IN ('GREEN', 'YELLOW', 'RED')) AS other_entities,
+        SUM(underreplicated_shards) FILTER (WHERE health NOT IN ('GREEN', 'YELLOW', 'RED')) AS other_underreplicated_shards,
+        (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('sys', 'information_schema', 'pg_catalog')) AS total_tables,
+        (SELECT COUNT(*) FROM information_schema.table_partitions) AS total_partitions
+    FROM sys.health;
+
+cluster_health                | GREEN
+green_entities                | 566
+green_underreplicated_shards  | 0
+yellow_entities               | 0
+yellow_underreplicated_shards | NULL
+red_entities                  | 0
+red_underreplicated_shards    | NULL
+other_entities                | 0
+other_underreplicated_shards  | NULL
+total_tables                  | 590
+total_partitions              | 100
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+```
