@@ -23,6 +23,19 @@ class MoveRecommendation:
     shard_type: str
     size_gb: float
     reason: str
+    partition_ident: Optional[str] = None  # CRITICAL FIX: Add partition support
+    partition_values: Optional[str] = None  # Human-readable partition values
+
+    @property
+    def full_table_identifier(self) -> str:
+        """Unique table identifier including partition"""
+        base = f"{self.schema_name}.{self.table_name}" if self.schema_name != "doc" else self.table_name
+        if self.partition_values and self.partition_values.strip():
+            return f"{base}[{self.partition_values}]"
+        elif self.partition_ident and self.partition_ident.strip():
+            return f"{base}[{self.partition_ident}]"
+        else:
+            return base
 
     def to_sql(self) -> str:
         """Generate the SQL command for this move"""
@@ -65,14 +78,14 @@ class ShardAnalyzer:
         self.client = client
         self.nodes: List[NodeInfo] = []
         self.shards: List[ShardInfo] = []
-        
+
         # Initialize session-based caches for performance
         self._zone_conflict_cache = {}
         self._node_lookup_cache = {}
         self._target_nodes_cache = {}
         self._cache_hits = 0
         self._cache_misses = 0
-        
+
         self._refresh_data()
 
     def _refresh_data(self):
@@ -161,14 +174,52 @@ class ShardAnalyzer:
 
     def check_zone_balance(self,
                           table_name: Optional[str] = None,
-                          tolerance_percent: float = 10.0) -> Dict[str, Dict[str, int]]:
-        """Check if zones are balanced within tolerance"""
+                          partition_ident: Optional[str] = None,
+                          tolerance_percent: float = 10.0) -> Dict[str, Dict[str, Any]]:
+        """Check if zones are balanced within tolerance - now partition-aware"""
         # Filter shards by table if specified
         shards = self.shards
         if table_name:
             shards = [s for s in shards if s.table_name == table_name]
 
-        # Count shards by zone and type
+        # Further filter by partition if specified
+        if partition_ident is not None:
+            shards = [s for s in shards if getattr(s, 'partition_ident', None) == partition_ident]
+
+        # If no partition filter specified but we have partitioned tables,
+        # return stats grouped by partition
+        if partition_ident is None and table_name:
+            # Check if table has partitions
+            partitions = set(getattr(s, 'partition_ident', None) for s in shards)
+            partitions.discard(None)
+
+            if partitions:
+                # Return partition-aware stats
+                result = {}
+                for p_ident in partitions:
+                    p_shards = [s for s in shards if getattr(s, 'partition_ident', None) == p_ident]
+                    partition_stats = defaultdict(lambda: {'PRIMARY': 0, 'REPLICA': 0, 'TOTAL': 0})
+
+                    for shard in p_shards:
+                        shard_type = shard.shard_type
+                        partition_stats[shard.zone][shard_type] += 1
+                        partition_stats[shard.zone]['TOTAL'] += 1
+
+                    result[f"partition_{p_ident}"] = dict(partition_stats)
+
+                # Also add non-partitioned shards if any
+                non_partitioned = [s for s in shards if getattr(s, 'partition_ident', None) is None]
+                if non_partitioned:
+                    non_partition_stats = defaultdict(lambda: {'PRIMARY': 0, 'REPLICA': 0, 'TOTAL': 0})
+                    for shard in non_partitioned:
+                        shard_type = shard.shard_type
+                        non_partition_stats[shard.zone][shard_type] += 1
+                        non_partition_stats[shard.zone]['TOTAL'] += 1
+                    result["unpartitioned"] = dict(non_partition_stats)
+
+                return result
+
+        # Count shards by zone and type (original behavior for non-partitioned or when partition specified)
         zone_stats = defaultdict(lambda: {'PRIMARY': 0, 'REPLICA': 0, 'TOTAL': 0})
 
         for shard in shards:
@@ -177,6 +228,83 @@ class ShardAnalyzer:
             zone_stats[shard.zone]['TOTAL'] += 1
 
         return dict(zone_stats)
+
+    def detect_partition_zone_violations(self,
+                                       table_name: Optional[str] = None,
+                                       tolerance_percent: float = 10.0) -> List[Dict[str, Any]]:
+        """Detect zone balance violations at the partition level
+
+        Returns list of violations with details about which partitions violate zone constraints
+        """
+        violations = []
+
+        # Filter shards by table if specified
+        shards = self.shards
+        if table_name:
+            shards = [s for s in shards if s.table_name == table_name]
+
+        # Group shards by table and partition
+        table_partitions = defaultdict(lambda: defaultdict(list))
+        for shard in shards:
+            table_key = f"{shard.schema_name}.{shard.table_name}"
+            partition_key = getattr(shard, 'partition_ident', None) or 'unpartitioned'
+            table_partitions[table_key][partition_key].append(shard)
+
+        # Check each table partition for zone violations
+        for table_key, partitions in table_partitions.items():
+            for partition_key, partition_shards in partitions.items():
+                # Count primary shards by zone for this partition
+                zone_primary_counts = defaultdict(int)
+                total_primaries = 0
+
+                for shard in partition_shards:
+                    if shard.shard_type == 'PRIMARY':
+                        zone_primary_counts[shard.zone] += 1
+                        total_primaries += 1
+
+                if total_primaries < 2:  # Skip single-shard partitions
+                    continue
+
+                # Check for severe imbalances (e.g., all shards in one zone)
+                if len(zone_primary_counts) == 1:
+                    # All primaries in single zone - critical violation
+                    zone = list(zone_primary_counts.keys())[0]
+                    violations.append({
+                        'table': table_key,
+                        'partition': partition_key,
+                        'severity': 'CRITICAL',
+                        'type': 'SINGLE_ZONE_CONCENTRATION',
+                        'description': f'All {total_primaries} primary shards in zone {zone}',
+                        'zone_distribution': dict(zone_primary_counts),
+                        'total_primaries': total_primaries,
+                        'recommendation': f'Redistribute shards across multiple zones'
+                    })
+                else:
+                    # Check for imbalance beyond tolerance
+                    target_per_zone = total_primaries / len(zone_primary_counts)
+                    max_deviation = 0
+                    worst_zone = None
+
+                    for zone, count in zone_primary_counts.items():
+                        deviation = abs(count - target_per_zone) / target_per_zone * 100
+                        if deviation > max_deviation:
+                            max_deviation = deviation
+                            worst_zone = zone
+
+                    if max_deviation > tolerance_percent:
+                        violations.append({
+                            'table': table_key,
+                            'partition': partition_key,
+                            'severity': 'HIGH' if max_deviation > 50 else 'MEDIUM',
+                            'type': 'ZONE_IMBALANCE',
+                            'description': f'Zone imbalance: {max_deviation:.1f}% deviation (worst: {worst_zone})',
+                            'zone_distribution': dict(zone_primary_counts),
+                            'total_primaries': total_primaries,
+                            'max_deviation_percent': max_deviation,
+                            'recommendation': f'Rebalance shards to achieve better zone distribution'
+                        })
+
+        return violations
 
     def find_nodes_with_capacity(self,
                                 required_space_gb: float,
@@ -241,14 +369,14 @@ class ShardAnalyzer:
 
         # Get moveable shards (only healthy ones for actual operations)
         moveable_shards = self.find_moveable_shards(min_size_gb, max_size_gb, table_name)
-        
+
         print(f"Analyzing {len(moveable_shards)} candidate shards in size range {min_size_gb}-{max_size_gb}GB...")
 
         if not moveable_shards:
             return recommendations
 
         # Analyze current zone balance
-        zone_stats = self.check_zone_balance(table_name, zone_tolerance_percent)
+        zone_stats = self.check_zone_balance(table_name, None, zone_tolerance_percent)
 
         # Calculate target distribution
         total_shards = sum(stats['TOTAL'] for stats in zone_stats.values())
@@ -263,7 +391,7 @@ class ShardAnalyzer:
             current_count = stats['TOTAL']
             threshold_high = target_per_zone * (1 + zone_tolerance_percent / 100)
             threshold_low = target_per_zone * (1 - zone_tolerance_percent / 100)
-            
+
             if current_count > threshold_high:
                 overloaded_zones.append(zone)
             elif current_count < threshold_low:
@@ -279,7 +407,7 @@ class ShardAnalyzer:
         # Generate move recommendations
         safe_recommendations = 0
         total_evaluated = 0
-        
+
         for i, shard in enumerate(processing_shards):
             if len(recommendations) >= max_recommendations:
                 break
@@ -287,9 +415,9 @@ class ShardAnalyzer:
             # Show progress every 50 shards when processing many
             if len(processing_shards) > 100 and i > 0 and i % 50 == 0:
                 print(".", end="", flush=True)
-            
+
             total_evaluated += 1
-            
+
             # Skip based on priority mode
             if not prioritize_space:
                 # Zone balancing mode: only move shards from overloaded zones
@@ -309,7 +437,7 @@ class ShardAnalyzer:
             # Only check nodes in different zones (for zone balancing)
             if not prioritize_space:
                 target_nodes = [node for node in target_nodes if node.zone != shard.zone]
-            
+
             # Limit to top 3 candidates to reduce validation overhead
             target_nodes = target_nodes[:3]
 
@@ -321,6 +449,8 @@ class ShardAnalyzer:
                     table_name=shard.table_name,
                     schema_name=shard.schema_name,
                     shard_id=shard.shard_id,
+                    partition_ident=shard.partition_ident,
+                    partition_values=shard.partition_values,
                     from_node=shard.node_name,
                     to_node=candidate_node.name,
                     from_zone=shard.zone,
@@ -329,7 +459,7 @@ class ShardAnalyzer:
                     size_gb=shard.size_gb,
                     reason="Safety validation"
                 )
-                
+
                 # Check if this move would be safe
                 is_safe, safety_msg = self.validate_move_safety(temp_rec, max_disk_usage_percent)
                 if is_safe:
@@ -383,6 +513,8 @@ class ShardAnalyzer:
                 table_name=shard.table_name,
                 schema_name=shard.schema_name,
                 shard_id=shard.shard_id,
+                partition_ident=shard.partition_ident,
+                partition_values=shard.partition_values,
                 from_node=shard.node_name,
                 to_node=target_node.name,
                 from_zone=shard.zone,
@@ -400,7 +532,7 @@ class ShardAnalyzer:
         print(f"Performance: {self.get_cache_stats()}")
         return recommendations
 
-    def validate_move_safety(self, recommendation: MoveRecommendation, 
+    def validate_move_safety(self, recommendation: MoveRecommendation,
                            max_disk_usage_percent: float = 90.0) -> Tuple[bool, str]:
         """Validate that a move recommendation is safe to execute"""
         # Find target node (with caching)
@@ -424,13 +556,13 @@ class ShardAnalyzer:
             return False, f"Target node disk usage too high ({target_node.disk_usage_percent:.1f}%)"
 
         return True, "Move appears safe"
-    
+
     def _get_node_cached(self, node_name: str):
         """Get node by name with caching"""
         if node_name in self._node_lookup_cache:
             self._cache_hits += 1
             return self._node_lookup_cache[node_name]
-        
+
         # Find node (cache miss)
         self._cache_misses += 1
         target_node = None
@@ -438,41 +570,41 @@ class ShardAnalyzer:
             if node.name == node_name:
                 target_node = node
                 break
-        
+
         self._node_lookup_cache[node_name] = target_node
         return target_node
-    
+
     def _check_zone_conflict_cached(self, recommendation: MoveRecommendation) -> Optional[str]:
         """Check zone conflicts with caching"""
         # Create cache key: table, shard, target zone
         target_zone = self._get_node_zone(recommendation.to_node)
         cache_key = (recommendation.table_name, recommendation.shard_id, target_zone)
-        
+
         if cache_key in self._zone_conflict_cache:
             self._cache_hits += 1
             return self._zone_conflict_cache[cache_key]
-        
+
         # Cache miss - do expensive check
         self._cache_misses += 1
         result = self._check_zone_conflict(recommendation)
         self._zone_conflict_cache[cache_key] = result
         return result
-    
+
     def _get_node_zone(self, node_name: str) -> str:
         """Get zone for a node name"""
         node = self._get_node_cached(node_name)
         return node.zone if node else "unknown"
-    
+
     def get_cache_stats(self) -> str:
         """Get cache performance statistics"""
         total = self._cache_hits + self._cache_misses
         if total == 0:
             return "Cache stats: No operations yet"
-        
+
         hit_rate = (self._cache_hits / total) * 100
         return f"Cache stats: {hit_rate:.1f}% hit rate ({self._cache_hits} hits, {self._cache_misses} misses)"
-    
-    def _find_nodes_with_capacity_cached(self, required_space_gb: float, exclude_nodes: set, 
+
+    def _find_nodes_with_capacity_cached(self, required_space_gb: float, exclude_nodes: set,
                                        min_free_space_gb: float, max_disk_usage_percent: float) -> List[NodeInfo]:
         """Find nodes with capacity using caching for repeated queries"""
         # Create cache key based on parameters (rounded to avoid float precision issues)
@@ -482,11 +614,11 @@ class ShardAnalyzer:
             round(min_free_space_gb, 1),
             round(max_disk_usage_percent, 1)
         )
-        
+
         if cache_key in self._target_nodes_cache:
             self._cache_hits += 1
             return self._target_nodes_cache[cache_key]
-        
+
         # Cache miss - do expensive calculation
         self._cache_misses += 1
         result = self.find_nodes_with_capacity(
@@ -495,7 +627,7 @@ class ShardAnalyzer:
             min_free_space_gb=min_free_space_gb,
             max_disk_usage_percent=max_disk_usage_percent
         )
-        
+
         self._target_nodes_cache[cache_key] = result
         return result
 
@@ -509,27 +641,44 @@ class ShardAnalyzer:
         - Ensures move doesn't violate zone-awareness principles
         """
         try:
-            # Query to get all copies of this shard across nodes and zones
+            # CRITICAL FIX: Get partition_ident from the shard we're moving
+            source_shard = None
+            for shard in self.shards:
+                if (shard.table_name == recommendation.table_name and
+                    shard.schema_name == recommendation.schema_name and
+                    shard.shard_id == recommendation.shard_id and
+                    shard.node_name == recommendation.from_node):
+                    source_shard = shard
+                    break
+
+            if not source_shard:
+                return f"Source shard not found: {recommendation.table_name}[{recommendation.shard_id}] on {recommendation.from_node}"
+
+            # Query to get all copies of THIS SPECIFIC PARTITION'S shard
             query = """
             SELECT
-                s.node['id'] as node_id,
-                s.node['name'] as node_name,
+                COALESCE(s.node['id'], 'corrupted') as node_id,
+                COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
                 n.attributes['zone'] as zone,
                 s."primary" as is_primary,
                 s.routing_state,
-                s.state
+                s.state,
+                s.partition_ident
             FROM sys.shards s
             JOIN sys.nodes n ON s.node['id'] = n.id
             WHERE s.table_name = ?
                 AND s.schema_name = ?
                 AND s.id = ?
+                AND (s.partition_ident = ? OR (s.partition_ident IS NULL AND ? IS NULL))
             ORDER BY s."primary" DESC, zone, node_name
             """
 
             result = self.client.execute_query(query, [
                 recommendation.table_name,
                 recommendation.schema_name,
-                recommendation.shard_id
+                recommendation.shard_id,
+                source_shard.partition_ident,    # CRITICAL FIX: Include partition
+                source_shard.partition_ident     # For NULL handling
             ])
 
             if not result.get('rows'):
@@ -553,7 +702,7 @@ class ShardAnalyzer:
                 return f"Target node {recommendation.to_node} not found in cluster"
 
             for row in result['rows']:
-                node_id, node_name, zone, is_primary, routing_state, state = row
+                node_id, node_name, zone, is_primary, routing_state, state, partition_ident = row
                 zone = zone or 'unknown'
                 total_copies += 1
 
@@ -594,7 +743,7 @@ class ShardAnalyzer:
             elif len(zones_with_copies) <= 1 and healthy_copies <= 1:
                 return f"Safety concern: Only {healthy_copies} healthy copy(ies) exist. Moving might risk data availability."
 
-            # ADDITIONAL CHECK: Verify zone allocation constraints for this table
+            # ADDITIONAL CHECK: Verify zone allocation constraints for this table partition
             table_zone_query = """
             SELECT
                 n.attributes['zone'] as zone,
@@ -604,6 +753,7 @@ class ShardAnalyzer:
             WHERE s.table_name = ?
                 AND s.schema_name = ?
                 AND s.id = ?
+                AND (s.partition_ident = ? OR (s.partition_ident IS NULL AND ? IS NULL))
                 AND s.routing_state = 'STARTED'
             GROUP BY n.attributes['zone']
             ORDER BY zone
@@ -612,7 +762,9 @@ class ShardAnalyzer:
             zone_result = self.client.execute_query(table_zone_query, [
                 recommendation.table_name,
                 recommendation.schema_name,
-                recommendation.shard_id
+                recommendation.shard_id,
+                source_shard.partition_ident,    # CRITICAL FIX: Include partition
+                source_shard.partition_ident     # For NULL handling
             ])
 
             current_zone_counts = {}
@@ -635,7 +787,7 @@ class ShardAnalyzer:
         """Get shard size distribution analysis"""
         # Only analyze STARTED shards
         started_shards = [s for s in self.shards if s.state == 'STARTED']
-        
+
         if not started_shards:
             return {
                 'total_shards': 0,
@@ -644,11 +796,11 @@ class ShardAnalyzer:
                 'small_shards_percentage': 0.0,
                 'avg_shard_size_gb': 0.0
             }
-        
+
         total_shards = len(started_shards)
         total_size_gb = sum(s.size_gb for s in started_shards)
         avg_size_gb = total_size_gb / total_shards if total_shards > 0 else 0.0
-        
+
         # Define size buckets (in GB)
         size_buckets = {
             '<1GB': {'count': 0, 'total_size': 0.0, 'max_size': 0.0},
@@ -657,14 +809,14 @@ class ShardAnalyzer:
             '10GB-50GB': {'count': 0, 'total_size': 0.0, 'max_size': 0.0},
             '>=50GB': {'count': 0, 'total_size': 0.0, 'max_size': 0.0}
         }
-        
+
         # Categorize shards by size
         large_shards_count = 0  # >50GB shards
         very_small_shards = 0  # <1GB shards (for percentage calculation)
-        
+
         for shard in started_shards:
             size_gb = shard.size_gb
-            
+
             if size_gb >= 50:
                 size_buckets['>=50GB']['count'] += 1
                 size_buckets['>=50GB']['total_size'] += size_gb
@@ -687,17 +839,17 @@ class ShardAnalyzer:
                 size_buckets['<1GB']['total_size'] += size_gb
                 size_buckets['<1GB']['max_size'] = max(size_buckets['<1GB']['max_size'], size_gb)
                 very_small_shards += 1
-        
+
         # Calculate average size for each bucket
         for bucket_name, bucket_data in size_buckets.items():
             if bucket_data['count'] > 0:
                 bucket_data['avg_size_gb'] = bucket_data['total_size'] / bucket_data['count']
             else:
                 bucket_data['avg_size_gb'] = 0.0
-        
+
         # Calculate percentage of very small shards (<1GB)
         very_small_percentage = (very_small_shards / total_shards * 100) if total_shards > 0 else 0.0
-        
+
         return {
             'total_shards': total_shards,
             'total_size_gb': total_size_gb,
@@ -711,33 +863,33 @@ class ShardAnalyzer:
         """Get detailed information about large shards (>=50GB) including partition values"""
         # Optimized query to fetch only large shards directly from database
         query = """
-        SELECT 
+        SELECT
             s.schema_name,
             s.table_name,
             translate(p.values::text, ':{}', '=()') as partition_values,
             s.id as shard_id,
             s.size / 1024^3 as size_gb,
             s."primary" as is_primary,
-            s.node['name'] as node_name,
-            s.node['id'] as node_id
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COALESCE(s.node['id'], 'corrupted') as node_id
         FROM sys.shards s
-        LEFT JOIN information_schema.table_partitions p 
-            ON s.table_name = p.table_name 
-            AND s.schema_name = p.table_schema 
+        LEFT JOIN information_schema.table_partitions p
+            ON s.table_name = p.table_name
+            AND s.schema_name = p.table_schema
             AND s.partition_ident = p.partition_ident
         WHERE s.state = 'STARTED'
             AND s.size >= 50 * 1024^3  -- 50GB in bytes
         ORDER BY s.size DESC
         """
-        
+
         result = self.client.execute_query(query)
-        
+
         large_shards = []
         for row in result.get('rows', []):
             # Get zone information from our nodes data
             node_id = row[7]
             zone = next((node.zone for node in self.nodes if node.id == node_id), 'unknown')
-            
+
             large_shards.append({
                 'schema_name': row[0] or 'doc',
                 'table_name': row[1],
@@ -748,53 +900,53 @@ class ShardAnalyzer:
                 'node_name': row[6],
                 'zone': zone
             })
-        
+
         return large_shards
 
     def get_small_shards_details(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get detailed information about the smallest shards, grouped by table/partition"""
         # Query to get all shards, ordered by size ascending to get the smallest
         query = """
-        SELECT 
+        SELECT
             s.schema_name,
             s.table_name,
             translate(p.values::text, ':{}', '=()') as partition_values,
             s.id as shard_id,
             s.size / 1024^3 as size_gb,
             s."primary" as is_primary,
-            s.node['name'] as node_name,
-            s.node['id'] as node_id
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COALESCE(s.node['id'], 'corrupted') as node_id
         FROM sys.shards s
-        LEFT JOIN information_schema.table_partitions p 
-            ON s.table_name = p.table_name 
-            AND s.schema_name = p.table_schema 
+        LEFT JOIN information_schema.table_partitions p
+            ON s.table_name = p.table_name
+            AND s.schema_name = p.table_schema
             AND s.partition_ident = p.partition_ident
         WHERE s.state = 'STARTED'
         ORDER BY s.size ASC
         """
-        
+
         result = self.client.execute_query(query)
-        
+
         # Group by table/partition to get aggregated stats
         table_partition_stats = {}
         for row in result.get('rows', []):
             # Get zone information from our nodes data
             node_id = row[7]
             zone = next((node.zone for node in self.nodes if node.id == node_id), 'unknown')
-            
+
             # Create table key with schema
             schema_name = row[0] or 'doc'
             table_name = row[1]
             table_display = table_name
             if schema_name and schema_name != 'doc':
                 table_display = f"{schema_name}.{table_name}"
-            
+
             # Create partition key
             partition_key = row[2] or "N/A"
-            
+
             # Create combined key
             key = (table_display, partition_key)
-            
+
             if key not in table_partition_stats:
                 table_partition_stats[key] = {
                     'sizes': [],
@@ -802,7 +954,7 @@ class ShardAnalyzer:
                     'replica_count': 0,
                     'total_size': 0.0
                 }
-            
+
             # Aggregate stats
             stats = table_partition_stats[key]
             size_gb = float(row[4]) if row[4] else 0.0
@@ -812,7 +964,7 @@ class ShardAnalyzer:
                 stats['primary_count'] += 1
             else:
                 stats['replica_count'] += 1
-        
+
         # Sort by average size ascending (smallest first) and return top tables/partitions
         sorted_stats = []
         for (table_name, partition_key), stats in table_partition_stats.items():
@@ -823,38 +975,38 @@ class ShardAnalyzer:
                 'stats': stats,
                 'avg_size': avg_size
             })
-        
+
         # Sort by average size and take the top 'limit' entries
         sorted_stats.sort(key=lambda x: x['avg_size'])
         return sorted_stats[:limit]
 
     def get_table_size_breakdown(self, limit: Optional[int] = 10, order: str = 'largest') -> List[Dict[str, Any]]:
         """Get table/partition size breakdown, sorted by total size
-        
+
         Args:
             limit: Number of tables/partitions to return (None for all)
             order: 'largest' for biggest first, 'smallest' for smallest first
-        
+
         Returns:
             List of table/partition stats with size information
         """
         query = """
-        SELECT 
+        SELECT
             s.schema_name,
             s.table_name,
             translate(p.values::text, ':{}', '=()') as partition_values,
             s.size / 1024^3 as size_gb,
             s."primary" as is_primary
         FROM sys.shards s
-        LEFT JOIN information_schema.table_partitions p 
-            ON s.table_name = p.table_name 
-            AND s.schema_name = p.table_schema 
+        LEFT JOIN information_schema.table_partitions p
+            ON s.table_name = p.table_name
+            AND s.schema_name = p.table_schema
             AND s.partition_ident = p.partition_ident
         WHERE s.state = 'STARTED'
         """
-        
+
         result = self.client.execute_query(query)
-        
+
         # Group by table/partition to get aggregated stats
         table_partition_stats = {}
         for row in result.get('rows', []):
@@ -863,13 +1015,13 @@ class ShardAnalyzer:
             table_display = table_name
             if schema_name and schema_name != 'doc':
                 table_display = f"{schema_name}.{table_name}"
-            
+
             # Create partition key
             partition_key = row[2] or "N/A"
-            
+
             # Create combined key
             key = (table_display, partition_key)
-            
+
             if key not in table_partition_stats:
                 table_partition_stats[key] = {
                     'sizes': [],
@@ -877,7 +1029,7 @@ class ShardAnalyzer:
                     'replica_count': 0,
                     'total_size': 0.0
                 }
-            
+
             # Aggregate stats
             stats = table_partition_stats[key]
             size_gb = float(row[3]) if row[3] else 0.0
@@ -887,7 +1039,7 @@ class ShardAnalyzer:
                 stats['primary_count'] += 1
             else:
                 stats['replica_count'] += 1
-        
+
         # Convert to list and calculate derived stats
         table_stats = []
         for (table_name, partition_key), stats in table_partition_stats.items():
@@ -895,7 +1047,7 @@ class ShardAnalyzer:
             min_size = min(stats['sizes']) if stats['sizes'] else 0.0
             max_size = max(stats['sizes']) if stats['sizes'] else 0.0
             avg_size = stats['total_size'] / total_shards if total_shards > 0 else 0.0
-            
+
             table_stats.append({
                 'table_name': table_name,
                 'partition': partition_key,
@@ -907,18 +1059,18 @@ class ShardAnalyzer:
                 'max_size': max_size,
                 'total_size': stats['total_size']
             })
-        
+
         # Sort by total size
         reverse = order == 'largest'
         table_stats.sort(key=lambda x: x['total_size'], reverse=reverse)
-        
+
         return table_stats if limit is None else table_stats[:limit]
 
     def get_cluster_overview(self) -> Dict[str, Any]:
         """Get a comprehensive overview of the cluster"""
         # Get cluster watermark settings
         watermarks = self.client.get_cluster_watermarks()
-        
+
         overview = {
             'nodes': len(self.nodes),
             'zones': len(set(node.zone for node in self.nodes)),
@@ -940,7 +1092,7 @@ class ShardAnalyzer:
         for node in self.nodes:
             node_shards = [s for s in self.shards if s.node_name == node.name]
             watermark_info = self._calculate_node_watermark_remaining(node, watermarks)
-            
+
             overview['node_health'].append({
                 'name': node.name,
                 'zone': node.zone,
@@ -957,28 +1109,28 @@ class ShardAnalyzer:
 
     def _calculate_node_watermark_remaining(self, node: 'NodeInfo', watermarks: Dict[str, Any]) -> Dict[str, float]:
         """Calculate remaining space until watermarks are reached"""
-        
+
         # Parse watermark percentages
         low_watermark = self._parse_watermark_percentage(watermarks.get('low', '85%'))
         high_watermark = self._parse_watermark_percentage(watermarks.get('high', '90%'))
-        
+
         # Calculate remaining space to each watermark
         total_space_bytes = node.fs_total
         current_used_bytes = node.fs_used
-        
+
         # Space that would be used at each watermark
         low_watermark_used_bytes = total_space_bytes * (low_watermark / 100.0)
         high_watermark_used_bytes = total_space_bytes * (high_watermark / 100.0)
-        
+
         # Remaining space until each watermark (negative if already exceeded)
         remaining_to_low_gb = max(0, (low_watermark_used_bytes - current_used_bytes) / (1024**3))
         remaining_to_high_gb = max(0, (high_watermark_used_bytes - current_used_bytes) / (1024**3))
-        
+
         return {
             'remaining_to_low_gb': remaining_to_low_gb,
             'remaining_to_high_gb': remaining_to_high_gb
         }
-    
+
     def _parse_watermark_percentage(self, watermark_value: str) -> float:
         """Parse watermark percentage from string like '85%' or '0.85'"""
         if isinstance(watermark_value, str):
@@ -1071,6 +1223,8 @@ class ShardAnalyzer:
                     table_name=shard.table_name,
                     schema_name=shard.schema_name,
                     shard_id=shard.shard_id,
+                    partition_ident=shard.partition_ident,
+                    partition_values=shard.partition_values,
                     from_node=node_name,
                     to_node=target.name,
                     from_zone=shard.zone,
@@ -1093,6 +1247,8 @@ class ShardAnalyzer:
                     table_name=shard.table_name,
                     schema_name=shard.schema_name,
                     shard_id=shard.shard_id,
+                    partition_ident=shard.partition_ident,
+                    partition_values=shard.partition_values,
                     from_node=node_name,
                     to_node=best_target.name,
                     from_zone=shard.zone,
@@ -1135,35 +1291,39 @@ class ShardAnalyzer:
 
 class RecoveryMonitor:
     """Monitor shard recovery operations"""
-    
+
     def __init__(self, client: CrateDBClient):
         self.client = client
-    
-    def get_cluster_recovery_status(self, 
+
+    def get_cluster_recovery_status(self,
                                   table_name: Optional[str] = None,
                                   node_name: Optional[str] = None,
                                   recovery_type_filter: str = 'all',
                                   include_transitioning: bool = False) -> List[RecoveryInfo]:
         """Get comprehensive recovery status with minimal cluster impact"""
-        
+
         # Get all recovering shards using the efficient combined query
         recoveries = self.client.get_all_recovering_shards(table_name, node_name, include_transitioning)
-        
+
         # Apply recovery type filter
         if recovery_type_filter != 'all':
             recoveries = [r for r in recoveries if r.recovery_type.upper() == recovery_type_filter.upper()]
-        
+
         return recoveries
-    
-    def get_problematic_shards(self, 
+
+    def get_problematic_shards(self,
                              table_name: Optional[str] = None,
                              node_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get shards that need attention but aren't actively recovering"""
         return self.client.get_problematic_shards(table_name, node_name)
-    
+
+    def get_cluster_health(self) -> Optional[Dict[str, Any]]:
+        """Get cluster health information including underreplicated shards"""
+        return self.client.get_cluster_health_summary()
+
     def get_recovery_summary(self, recoveries: List[RecoveryInfo]) -> Dict[str, Any]:
         """Generate a summary of recovery operations"""
-        
+
         if not recoveries:
             return {
                 'total_recoveries': 0,
@@ -1172,13 +1332,13 @@ class RecoveryMonitor:
                 'avg_progress': 0.0,
                 'total_size_gb': 0.0
             }
-        
+
         # Group by recovery type
         by_type = {}
         by_stage = {}
         total_progress = 0.0
         total_size_gb = 0.0
-        
+
         for recovery in recoveries:
             # By type
             if recovery.recovery_type not in by_type:
@@ -1189,23 +1349,23 @@ class RecoveryMonitor:
                 }
             by_type[recovery.recovery_type]['count'] += 1
             by_type[recovery.recovery_type]['total_size_gb'] += recovery.size_gb
-            
+
             # By stage
             if recovery.stage not in by_stage:
                 by_stage[recovery.stage] = 0
             by_stage[recovery.stage] += 1
-            
+
             # Totals
             total_progress += recovery.overall_progress
             total_size_gb += recovery.size_gb
-        
+
         # Calculate averages
         for type_name, rec_type in by_type.items():
             if rec_type['count'] > 0:
                 type_recoveries = [r for r in recoveries if r.recovery_type == type_name]
                 if type_recoveries:
                     rec_type['avg_progress'] = sum(r.overall_progress for r in type_recoveries) / len(type_recoveries)
-        
+
         return {
             'total_recoveries': len(recoveries),
             'by_type': by_type,
@@ -1213,60 +1373,60 @@ class RecoveryMonitor:
             'avg_progress': total_progress / len(recoveries) if recoveries else 0.0,
             'total_size_gb': total_size_gb
         }
-    
+
     def format_recovery_display(self, recoveries: List[RecoveryInfo]) -> str:
         """Format recovery information for display"""
-        
+
         if not recoveries:
             return "✅ No active shard recoveries found"
-        
+
         # Group by recovery type
         peer_recoveries = [r for r in recoveries if r.recovery_type == 'PEER']
         disk_recoveries = [r for r in recoveries if r.recovery_type == 'DISK']
         other_recoveries = [r for r in recoveries if r.recovery_type not in ['PEER', 'DISK']]
-        
+
         output = [f"\n🔄 Active Shard Recoveries ({len(recoveries)} total)"]
         output.append("=" * 80)
-        
+
         if peer_recoveries:
             output.append(f"\n📡 PEER Recoveries ({len(peer_recoveries)})")
             output.append(self._format_recovery_table(peer_recoveries))
-        
+
         if disk_recoveries:
             output.append(f"\n💾 DISK Recoveries ({len(disk_recoveries)})")
             output.append(self._format_recovery_table(disk_recoveries))
-        
+
         if other_recoveries:
             output.append(f"\n🔧 Other Recoveries ({len(other_recoveries)})")
             output.append(self._format_recovery_table(other_recoveries))
-        
+
         # Add summary
         summary = self.get_recovery_summary(recoveries)
         output.append(f"\n📊 Summary:")
         output.append(f"   Total size: {summary['total_size_gb']:.1f} GB")
         output.append(f"   Average progress: {summary['avg_progress']:.1f}%")
-        
+
         return "\n".join(output)
-    
+
     def _format_recovery_table(self, recoveries: List[RecoveryInfo]) -> str:
         """Format a table of recovery information"""
-        
+
         if not recoveries:
             return "   No recoveries of this type"
-        
+
         # Table headers
         headers = ["Table", "Shard", "Node", "Recovery", "Stage", "Progress", "Size(GB)", "Time(s)"]
-        
+
         # Calculate column widths
         col_widths = [len(h) for h in headers]
-        
+
         rows = []
         for recovery in recoveries:
             # Format table name with partition values if available
             table_display = f"{recovery.schema_name}.{recovery.table_name}"
             if recovery.partition_values:
                 table_display = f"{table_display} {recovery.partition_values}"
-            
+
             row = [
                 table_display,
                 str(recovery.shard_id),
@@ -1278,57 +1438,57 @@ class RecoveryMonitor:
                 f"{recovery.total_time_seconds:.1f}"
             ]
             rows.append(row)
-            
+
             # Update column widths
             for i, cell in enumerate(row):
                 col_widths[i] = max(col_widths[i], len(cell))
-        
+
         # Format table
         output = []
-        
+
         # Header row
         header_row = "   " + " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
         output.append(header_row)
         output.append("   " + "-" * (len(header_row) - 3))
-        
+
         # Data rows
         for row in rows:
             data_row = "   " + " | ".join(cell.ljust(w) for cell, w in zip(row, col_widths))
             output.append(data_row)
-        
+
         return "\n".join(output)
 
 
 class ActiveShardMonitor:
     """Monitor active shard checkpoint progression over time"""
-    
+
     def __init__(self, client: CrateDBClient):
         self.client = client
-    
-    def compare_snapshots(self, snapshot1: List['ActiveShardSnapshot'], 
+
+    def compare_snapshots(self, snapshot1: List['ActiveShardSnapshot'],
                          snapshot2: List['ActiveShardSnapshot'],
                          min_activity_threshold: int = 0) -> List['ActiveShardActivity']:
         """Compare two snapshots and return activity data for shards present in both
-        
+
         Args:
             snapshot1: First snapshot (baseline)
             snapshot2: Second snapshot (comparison)
             min_activity_threshold: Minimum checkpoint delta to consider active (default: 0)
         """
         from .database import ActiveShardActivity
-        
+
         # Create lookup dict for snapshot1
         snapshot1_dict = {snap.shard_identifier: snap for snap in snapshot1}
-        
+
         activities = []
-        
+
         for snap2 in snapshot2:
             snap1 = snapshot1_dict.get(snap2.shard_identifier)
             if snap1:
                 # Calculate local checkpoint delta
                 local_checkpoint_delta = snap2.local_checkpoint - snap1.local_checkpoint
                 time_diff = snap2.timestamp - snap1.timestamp
-                
+
                 # Filter based on actual activity between snapshots
                 if local_checkpoint_delta >= min_activity_threshold:
                     activity = ActiveShardActivity(
@@ -1344,43 +1504,43 @@ class ActiveShardMonitor:
                         time_diff_seconds=time_diff
                     )
                     activities.append(activity)
-        
+
         # Sort by activity (highest checkpoint delta first)
         activities.sort(key=lambda x: x.local_checkpoint_delta, reverse=True)
-        
+
         return activities
-    
-    def format_activity_display(self, activities: List['ActiveShardActivity'], 
+
+    def format_activity_display(self, activities: List['ActiveShardActivity'],
                                show_count: int = 10, watch_mode: bool = False) -> str:
         """Format activity data for console display"""
         if not activities:
             return "✅ No active shards with significant checkpoint progression found"
-        
+
         # Limit to requested count
         activities = activities[:show_count]
-        
+
         # Calculate observation period for context
         if activities:
             observation_period = activities[0].time_diff_seconds
             output = [f"\n🔥 Most Active Shards ({len(activities)} shown, {observation_period:.0f}s observation period)"]
         else:
             output = [f"\n🔥 Most Active Shards ({len(activities)} shown, sorted by checkpoint activity)"]
-        
+
         output.append("")
-        
+
         # Add activity rate context
         if activities:
             total_activity = sum(a.local_checkpoint_delta for a in activities)
             avg_rate = sum(a.activity_rate for a in activities) / len(activities)
             output.append(f"[dim]Total checkpoint activity: {total_activity:,} changes, Average rate: {avg_rate:.1f}/sec[/dim]")
             output.append("")
-        
+
         # Create table headers
         headers = ["Rank", "Schema.Table", "Shard", "Partition", "Node", "Type", "Checkpoint Δ", "Rate/sec", "Trend"]
-        
+
         # Calculate column widths
         col_widths = [len(h) for h in headers]
-        
+
         # Prepare rows
         rows = []
         for i, activity in enumerate(activities, 1):
@@ -1393,7 +1553,7 @@ class ActiveShardMonitor:
             shard_type = "P" if activity.is_primary else "R"
             checkpoint_delta = f"{activity.local_checkpoint_delta:,}"
             rate = f"{activity.activity_rate:.1f}" if activity.activity_rate >= 0.1 else "<0.1"
-            
+
             # Calculate activity trend indicator
             if activity.activity_rate >= 100:
                 trend = "🔥 HOT"
@@ -1403,24 +1563,24 @@ class ActiveShardMonitor:
                 trend = "📊 MED"
             else:
                 trend = "📉 LOW"
-            
+
             row = [rank, table_id, shard_id, partition, node, shard_type, checkpoint_delta, rate, trend]
             rows.append(row)
-            
+
             # Update column widths
             for j, cell in enumerate(row):
                 col_widths[j] = max(col_widths[j], len(cell))
-        
+
         # Format table
         header_row = "   " + " | ".join(h.ljust(w) for h, w in zip(headers, col_widths))
         output.append(header_row)
         output.append("   " + "-" * (len(header_row) - 3))
-        
+
         # Data rows
         for row in rows:
             data_row = "   " + " | ".join(cell.ljust(w) for cell, w in zip(row, col_widths))
             output.append(data_row)
-        
+
         # Only show legend and insights in non-watch mode
         if not watch_mode:
             output.append("")
@@ -1430,18 +1590,18 @@ class ActiveShardMonitor:
             output.append("  • Partition: partition_ident (truncated if >14 chars, '-' if none)")
             output.append("  • Type: P=Primary, R=Replica")
             output.append("  • Trend: 🔥 HOT (≥100/s), 📈 HIGH (≥50/s), 📊 MED (≥10/s), 📉 LOW (<10/s)")
-            
+
             # Add insights about activity patterns
             if activities:
                 output.append("")
                 output.append("Insights:")
-                
+
                 # Count by trend
                 hot_count = len([a for a in activities if a.activity_rate >= 100])
                 high_count = len([a for a in activities if 50 <= a.activity_rate < 100])
                 med_count = len([a for a in activities if 10 <= a.activity_rate < 50])
                 low_count = len([a for a in activities if a.activity_rate < 10])
-                
+
                 if hot_count > 0:
                     output.append(f"  • {hot_count} HOT shards (≥100 changes/sec) - consider load balancing")
                 if high_count > 0:
@@ -1450,17 +1610,17 @@ class ActiveShardMonitor:
                     output.append(f"  • {med_count} MEDIUM activity shards - normal operation")
                 if low_count > 0:
                     output.append(f"  • {low_count} LOW activity shards - occasional writes")
-                
+
                 # Identify patterns
                 primary_activities = [a for a in activities if a.is_primary]
                 if len(primary_activities) == len(activities):
                     output.append("  • All active shards are PRIMARY - normal write pattern")
                 elif len(primary_activities) < len(activities) * 0.5:
                     output.append("  • Many REPLICA shards active - possible recovery/replication activity")
-                
+
                 # Node concentration
                 nodes = set(a.node_name for a in activities)
                 if len(nodes) <= 2:
                     output.append(f"  • Activity concentrated on {len(nodes)} node(s) - consider redistribution")
-        
+
         return "\n".join(output)

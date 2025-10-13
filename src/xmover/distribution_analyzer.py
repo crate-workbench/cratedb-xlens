@@ -31,15 +31,19 @@ def format_storage_size(size_gb: float) -> str:
 
 @dataclass
 class TableDistribution:
-    """Represents shard distribution for a single table"""
+    """Represents shard distribution for a single table or partition"""
     schema_name: str
     table_name: str
+    partition_ident: Optional[str]
     total_primary_size_gb: float
     node_distributions: Dict[str, Dict[str, Any]]  # node_name -> metrics
     
     @property
     def full_table_name(self) -> str:
-        return f"{self.schema_name}.{self.table_name}" if self.schema_name != "doc" else self.table_name
+        base_name = f"{self.schema_name}.{self.table_name}" if self.schema_name != "doc" else self.table_name
+        if self.partition_ident:
+            return f"{base_name}[{self.partition_ident}]"
+        return base_name
 
 
 @dataclass
@@ -53,6 +57,12 @@ class DistributionAnomaly:
     description: str
     details: Dict[str, Any]
     recommendations: List[str]
+    partition_ident: Optional[str] = None
+    
+    @property
+    def full_identifier(self) -> str:
+        """Get full table identifier including partition if available"""
+        return self.table.full_table_name
 
 
 class DistributionAnalyzer:
@@ -116,7 +126,8 @@ class DistributionAnalyzer:
         SELECT
             s.schema_name,
             s.table_name,
-            s.node['name'] as node_name,
+            COALESCE(s.partition_ident, '') as partition_ident,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
             COUNT(CASE WHEN s."primary" = true THEN 1 END) as primary_shards,
             COUNT(CASE WHEN s."primary" = false THEN 1 END) as replica_shards,
             COUNT(*) as total_shards,
@@ -127,8 +138,8 @@ class DistributionAnalyzer:
         FROM sys.shards s
         WHERE s.schema_name = ? AND s.table_name = ?
             AND s.routing_state = 'STARTED'
-        GROUP BY s.schema_name, s.table_name, s.node['name']
-        ORDER BY s.node['name']
+        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
         """
         
         result = self.client.execute_query(query, [schema_name, table_name])
@@ -137,30 +148,121 @@ class DistributionAnalyzer:
         if not rows:
             return None
         
-        # Build node distributions
-        node_distributions = {}
+        # Group by partition_ident and return list of distributions
+        partitions = {}
         for row in rows:
-            node_distributions[row[2]] = {
-                'primary_shards': row[3],
-                'replica_shards': row[4],
-                'total_shards': row[5],
-                'total_size_gb': row[6],
-                'primary_size_gb': row[7],
-                'replica_size_gb': row[8],
-                'total_documents': row[9]
+            partition_key = row[2]  # partition_ident
+            if partition_key not in partitions:
+                partitions[partition_key] = {
+                    'schema_name': row[0],
+                    'table_name': row[1], 
+                    'partition_ident': row[2] if row[2] else None,
+                    'nodes': {}
+                }
+            
+            partitions[partition_key]['nodes'][row[3]] = {  # row[3] is node_name
+                'primary_shards': row[4],
+                'replica_shards': row[5],
+                'total_shards': row[6],
+                'total_size_gb': row[7],
+                'primary_size_gb': row[8],
+                'replica_size_gb': row[9],
+                'total_documents': row[10]
             }
+        
+        # For now, return the first partition found (maintains backward compatibility)
+        # TODO: Update callers to handle multiple partitions
+        first_partition = next(iter(partitions.values()))
         
         # Calculate total primary size
         total_primary_size = sum(
-            node['primary_size_gb'] for node in node_distributions.values()
+            node['primary_size_gb'] for node in first_partition['nodes'].values()
         )
         
         return TableDistribution(
-            schema_name=rows[0][0],
-            table_name=rows[0][1],
+            schema_name=first_partition['schema_name'],
+            table_name=first_partition['table_name'],
+            partition_ident=first_partition['partition_ident'],
             total_primary_size_gb=total_primary_size,
-            node_distributions=node_distributions
+            node_distributions=first_partition['nodes']
         )
+
+    def get_all_partition_distributions(self, table_identifier: str) -> List[TableDistribution]:
+        """Get detailed distribution data for all partitions of a specific table"""
+        
+        # Parse schema and table name
+        if '.' in table_identifier:
+            schema_name, table_name = table_identifier.split('.', 1)
+        else:
+            schema_name = 'doc'
+            table_name = table_identifier
+        
+        query = """
+        SELECT
+            s.schema_name,
+            s.table_name,
+            COALESCE(s.partition_ident, '') as partition_ident,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
+            COUNT(CASE WHEN s."primary" = true THEN 1 END) as primary_shards,
+            COUNT(CASE WHEN s."primary" = false THEN 1 END) as replica_shards,
+            COUNT(*) as total_shards,
+            ROUND(SUM(s.size) / 1024.0 / 1024.0 / 1024.0, 2) as total_size_gb,
+            ROUND(SUM(CASE WHEN s."primary" = true THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as primary_size_gb,
+            ROUND(SUM(CASE WHEN s."primary" = false THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as replica_size_gb,
+            SUM(s.num_docs) as total_documents
+        FROM sys.shards s
+        WHERE s.schema_name = ? AND s.table_name = ?
+            AND s.routing_state = 'STARTED'
+        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        """
+        
+        result = self.client.execute_query(query, [schema_name, table_name])
+        rows = result.get('rows', [])
+        
+        if not rows:
+            return []
+        
+        # Group by partition_ident
+        partitions = {}
+        for row in rows:
+            partition_key = row[2]  # partition_ident
+            if partition_key not in partitions:
+                partitions[partition_key] = {
+                    'schema_name': row[0],
+                    'table_name': row[1], 
+                    'partition_ident': row[2] if row[2] else None,
+                    'nodes': {}
+                }
+            
+            partitions[partition_key]['nodes'][row[3]] = {  # row[3] is node_name
+                'primary_shards': row[4],
+                'replica_shards': row[5],
+                'total_shards': row[6],
+                'total_size_gb': row[7],
+                'primary_size_gb': row[8],
+                'replica_size_gb': row[9],
+                'total_documents': row[10]
+            }
+        
+        # Create TableDistribution objects for each partition
+        distributions = []
+        for partition_data in partitions.values():
+            total_primary_size = sum(
+                node['primary_size_gb'] for node in partition_data['nodes'].values()
+            )
+            
+            distribution = TableDistribution(
+                schema_name=partition_data['schema_name'],
+                table_name=partition_data['table_name'],
+                partition_ident=partition_data['partition_ident'],
+                total_primary_size_gb=total_primary_size,
+                node_distributions=partition_data['nodes']
+            )
+            distributions.append(distribution)
+        
+        # Sort by primary size (descending)
+        return sorted(distributions, key=lambda x: x.total_primary_size_gb, reverse=True)
 
     def format_table_health_report(self, table_dist: TableDistribution) -> None:
         """Format and display comprehensive table health report"""
@@ -331,22 +433,24 @@ class DistributionAnalyzer:
         """Get distribution data for the largest tables using BIGDUDES query"""
         
         query = """
-        WITH largest_tables AS (
+        WITH largest_partitions AS (
             SELECT
                 schema_name,
                 table_name,
+                partition_ident,
                 SUM(CASE WHEN "primary" = true THEN size ELSE 0 END) as total_primary_size
             FROM sys.shards
             WHERE schema_name NOT IN ('sys', 'information_schema', 'pg_catalog')
                 AND routing_state = 'STARTED'
-            GROUP BY schema_name, table_name
+            GROUP BY schema_name, table_name, partition_ident
             ORDER BY total_primary_size DESC
             LIMIT ?
         )
         SELECT
             s.schema_name,
             s.table_name,
-            s.node['name'] as node_name,
+            COALESCE(s.partition_ident, '') as partition_ident,
+            COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted')) as node_name,
             COUNT(CASE WHEN s."primary" = true THEN 1 END) as primary_shards,
             COUNT(CASE WHEN s."primary" = false THEN 1 END) as replica_shards,
             COUNT(*) as total_shards,
@@ -355,10 +459,10 @@ class DistributionAnalyzer:
             ROUND(SUM(CASE WHEN s."primary" = false THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as replica_size_gb,
             SUM(s.num_docs) as total_documents
         FROM sys.shards s
-        INNER JOIN largest_tables lt ON (s.schema_name = lt.schema_name AND s.table_name = lt.table_name)
+        INNER JOIN largest_partitions lp ON (s.schema_name = lp.schema_name AND s.table_name = lp.table_name AND COALESCE(s.partition_ident, '') = COALESCE(lp.partition_ident, ''))
         WHERE s.routing_state = 'STARTED'
-        GROUP BY s.schema_name, s.table_name, s.node['name']
-        ORDER BY s.schema_name, s.table_name, s.node['name']
+        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
         """
         
         result = self.client.execute_query(query, [top_n])
@@ -369,43 +473,45 @@ class DistributionAnalyzer:
         if not rows:
             return []
         
-        # Group results by table
-        tables_data = {}
+        # Group results by table and partition
+        partitions_data = {}
         for row in rows:
             # Ensure we have enough columns
-            if len(row) < 10:
+            if len(row) < 11:
                 continue
                 
-            table_key = f"{row[0]}.{row[1]}"
-            if table_key not in tables_data:
-                tables_data[table_key] = {
+            partition_key = f"{row[0]}.{row[1]}.{row[2]}"  # schema.table.partition
+            if partition_key not in partitions_data:
+                partitions_data[partition_key] = {
                     'schema_name': row[0],
                     'table_name': row[1],
+                    'partition_ident': row[2] if row[2] else None,
                     'nodes': {}
                 }
             
-            tables_data[table_key]['nodes'][row[2]] = {
-                'primary_shards': row[3],
-                'replica_shards': row[4],
-                'total_shards': row[5],
-                'total_size_gb': row[6],
-                'primary_size_gb': row[7],
-                'replica_size_gb': row[8],
-                'total_documents': row[9]
+            partitions_data[partition_key]['nodes'][row[3]] = {
+                'primary_shards': row[4],
+                'replica_shards': row[5],
+                'total_shards': row[6],
+                'total_size_gb': row[7],
+                'primary_size_gb': row[8],
+                'replica_size_gb': row[9],
+                'total_documents': row[10]
             }
         
         # Calculate total primary sizes and create TableDistribution objects
         distributions = []
-        for table_data in tables_data.values():
+        for partition_data in partitions_data.values():
             total_primary_size = sum(
-                node['primary_size_gb'] for node in table_data['nodes'].values()
+                node['primary_size_gb'] for node in partition_data['nodes'].values()
             )
             
             distribution = TableDistribution(
-                schema_name=table_data['schema_name'],
-                table_name=table_data['table_name'],
+                schema_name=partition_data['schema_name'],
+                table_name=partition_data['table_name'],
+                partition_ident=partition_data['partition_ident'],
                 total_primary_size_gb=total_primary_size,
-                node_distributions=table_data['nodes']
+                node_distributions=partition_data['nodes']
             )
             distributions.append(distribution)
         

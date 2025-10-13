@@ -127,21 +127,21 @@ class TestBasicCommandExecution:
     def test_analyze_command(self, runner, mock_client, mock_analyzer):
         """Test analyze command executes"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze'])
                 assert result.exit_code == 0
     
     def test_analyze_with_table(self, runner, mock_client, mock_analyzer):
         """Test analyze with table filter"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--table', 'test_table'])
                 assert result.exit_code == 0
     
     def test_analyze_with_largest(self, runner, mock_client, mock_analyzer):
         """Test analyze with largest option"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--largest', '5'])
                 assert result.exit_code == 0
     
@@ -160,14 +160,14 @@ class TestBasicCommandExecution:
     def test_monitor_recovery_command(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery command executes"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.RecoveryMonitor', return_value=mock_recovery_monitor):
+            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 result = runner.invoke(main, ['monitor-recovery'])
                 assert result.exit_code == 0
     
     def test_monitor_recovery_with_options(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery with options"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.RecoveryMonitor', return_value=mock_recovery_monitor):
+            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 result = runner.invoke(main, ['monitor-recovery', '--include-transitioning'])
                 assert result.exit_code == 0
     
@@ -188,14 +188,14 @@ class TestBasicCommandExecution:
     def test_deep_analyze_command(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze command executes"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze'])
                 assert result.exit_code == 0
     
     def test_deep_analyze_with_schema(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze with schema option"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze', '--schema', 'test_schema'])
                 assert result.exit_code == 0
     
@@ -301,7 +301,7 @@ class TestWatchModeHandling:
     def test_monitor_recovery_watch_mode(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery watch mode exits gracefully"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.RecoveryMonitor', return_value=mock_recovery_monitor):
+            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 with patch('time.sleep', side_effect=KeyboardInterrupt):
                     result = runner.invoke(main, ['monitor-recovery', '--watch'])
                     assert result.exit_code == 0
@@ -321,14 +321,14 @@ class TestSpecificScenarios:
     def test_analyze_enhanced_features(self, runner, mock_client, mock_analyzer):
         """Test analyze with enhanced features (branch-specific)"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--largest', '10', '--no-zero-size'])
                 assert result.exit_code == 0
     
     def test_monitor_recovery_include_transitioning_watch(self, runner, mock_client, mock_recovery_monitor):
-        """Test monitor-recovery --include-transitioning --watch"""
+        """Test monitor-recovery with include-transitioning in watch mode"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.RecoveryMonitor', return_value=mock_recovery_monitor):
+            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 with patch('time.sleep', side_effect=KeyboardInterrupt):
                     result = runner.invoke(main, [
                         'monitor-recovery', 
@@ -347,7 +347,7 @@ class TestSpecificScenarios:
     def test_deep_analyze_basic(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze basic functionality"""
         with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze'])
                 assert result.exit_code == 0
     

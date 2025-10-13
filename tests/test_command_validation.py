@@ -37,48 +37,49 @@ class TestCommandValidation:
         result = runner.invoke(main, ['--version'])
         assert result.exit_code == 0
     
-    def test_analyze_help(self, runner):
+    def test_analyze_help(self, runner, mock_successful_connection):
         """Test analyze command help"""
         result = runner.invoke(main, ['analyze', '--help'])
         assert result.exit_code == 0
         assert 'Analyze current shard distribution' in result.output
     
-    def test_test_connection_help(self, runner):
+    def test_test_connection_help(self, runner, mock_successful_connection):
         """Test test-connection command help"""
         result = runner.invoke(main, ['test-connection', '--help'])
         assert result.exit_code == 0
         assert 'Test connection to CrateDB cluster' in result.output
     
-    def test_monitor_recovery_help(self, runner):
+    def test_monitor_recovery_help(self, runner, mock_successful_connection):
         """Test monitor-recovery command help"""
         result = runner.invoke(main, ['monitor-recovery', '--help'])
         assert result.exit_code == 0
-        assert 'Monitor active shard recovery' in result.output
+        assert 'Monitor active shard recovery operations' in result.output
     
-    def test_problematic_translogs_help(self, runner):
+    def test_problematic_translogs_help(self, runner, mock_successful_connection):
         """Test problematic-translogs command help"""
         result = runner.invoke(main, ['problematic-translogs', '--help'])
         assert result.exit_code == 0
         assert 'Find tables with problematic translog sizes' in result.output
     
-    def test_deep_analyze_help(self, runner):
+    def test_deep_analyze_help(self, runner, mock_successful_connection):
         """Test deep-analyze command help"""
         result = runner.invoke(main, ['deep-analyze', '--help'])
         assert result.exit_code == 0
+        assert 'Deep analysis of shard sizes with configurable optimization rules' in result.output
     
-    def test_large_translogs_help(self, runner):
+    def test_large_translogs_help(self, runner, mock_successful_connection):
         """Test large-translogs command help"""
         result = runner.invoke(main, ['large-translogs', '--help'])
         assert result.exit_code == 0
-        assert 'Monitor shards with large translog' in result.output
+        assert 'Monitor shards with large translog uncommitted sizes' in result.output
     
-    def test_shard_distribution_help(self, runner):
+    def test_shard_distribution_help(self, runner, mock_successful_connection):
         """Test shard-distribution command help"""
         result = runner.invoke(main, ['shard-distribution', '--help'])
         assert result.exit_code == 0
         assert 'Analyze shard distribution anomalies' in result.output
     
-    def test_zone_analysis_help(self, runner):
+    def test_zone_analysis_help(self, runner, mock_successful_connection):
         """Test zone-analysis command help"""
         result = runner.invoke(main, ['zone-analysis', '--help'])
         assert result.exit_code == 0
@@ -86,7 +87,7 @@ class TestCommandValidation:
     
     def test_analyze_dry_run(self, runner, mock_successful_connection):
         """Test analyze command executes without errors"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_cluster_overview.return_value = {
                 'nodes': 3, 'zones': 2, 'total_shards': 100, 'primary_shards': 50,
@@ -130,9 +131,9 @@ class TestCommandValidation:
     
     def test_monitor_recovery_dry_run(self, runner, mock_successful_connection):
         """Test monitor-recovery command executes without errors"""
-        with patch('xmover.cli.RecoveryMonitor') as mock_monitor:
+        with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
             mock_instance = Mock()
-            mock_instance.get_recovery_status.return_value = []
+            mock_instance.get_cluster_recovery_status.return_value = []
             mock_monitor.return_value = mock_instance
             
             result = runner.invoke(main, ['monitor-recovery', '--include-transitioning'])
@@ -226,7 +227,7 @@ class TestSpecificCommandOptions:
     
     def test_analyze_options_validation(self, runner, mock_successful_connection):
         """Test analyze command option combinations"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_cluster_overview.return_value = {
                 'nodes': 3, 'zones': 2, 'total_shards': 100, 'primary_shards': 50,
@@ -284,9 +285,9 @@ class TestSpecificCommandOptions:
     
     def test_monitor_recovery_options(self, runner, mock_successful_connection):
         """Test monitor-recovery command options"""
-        with patch('xmover.cli.RecoveryMonitor') as mock_monitor:
+        with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
             mock_instance = Mock()
-            mock_instance.get_recovery_status.return_value = []
+            mock_instance.get_cluster_recovery_status.return_value = []
             mock_monitor.return_value = mock_instance
             
             # Test recovery type options
