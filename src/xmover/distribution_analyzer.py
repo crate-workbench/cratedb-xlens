@@ -138,8 +138,8 @@ class DistributionAnalyzer:
         FROM sys.shards s
         WHERE s.schema_name = ? AND s.table_name = ?
             AND s.routing_state = 'STARTED'
-        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
-        ORDER BY s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        GROUP BY s.schema_name, s.table_name, COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
         """
         
         result = self.client.execute_query(query, [schema_name, table_name])
@@ -213,8 +213,8 @@ class DistributionAnalyzer:
         FROM sys.shards s
         WHERE s.schema_name = ? AND s.table_name = ?
             AND s.routing_state = 'STARTED'
-        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
-        ORDER BY s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        GROUP BY s.schema_name, s.table_name, COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
         """
         
         result = self.client.execute_query(query, [schema_name, table_name])
@@ -461,8 +461,8 @@ class DistributionAnalyzer:
         FROM sys.shards s
         INNER JOIN largest_partitions lp ON (s.schema_name = lp.schema_name AND s.table_name = lp.table_name AND COALESCE(s.partition_ident, '') = COALESCE(lp.partition_ident, ''))
         WHERE s.routing_state = 'STARTED'
-        GROUP BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
-        ORDER BY s.schema_name, s.table_name, s.partition_ident, COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        GROUP BY s.schema_name, s.table_name, COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
+        ORDER BY s.schema_name, s.table_name, COALESCE(s.partition_ident, ''), COALESCE(s.node['name'], 'unknown-' || COALESCE(s.node['id'], 'corrupted'))
         """
         
         result = self.client.execute_query(query, [top_n])
