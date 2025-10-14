@@ -16,7 +16,7 @@ from rich import box
 
 from .base import BaseCommand
 from ..analyzer import ShardAnalyzer
-from ..utils import format_size
+from ..utils import format_size, get_effective_disk_usage_threshold
 
 
 class OperationsCommands(BaseCommand):
@@ -109,6 +109,18 @@ class OperationsCommands(BaseCommand):
 
         analyzer = ShardAnalyzer(self.client)
         
+        # Get cluster watermark configuration and calculate effective disk usage threshold
+        watermark_config = self.client.get_cluster_watermark_config()
+        effective_max_disk_usage = get_effective_disk_usage_threshold(watermark_config)
+        
+        # Use the lower of user-specified or watermark-based threshold
+        if max_disk_usage > effective_max_disk_usage:
+            original_max_disk_usage = max_disk_usage
+            max_disk_usage = effective_max_disk_usage
+            watermark_override = True
+        else:
+            watermark_override = False
+        
         # Safety check for auto-execute
         if auto_execute and dry_run:
             self.console.print("[red]❌ Error: --auto-execute requires --execute flag[/red]")
@@ -127,7 +139,18 @@ class OperationsCommands(BaseCommand):
         if node:
             self.console.print(f"[dim]Filtering: Only showing moves from source node '{node}'[/dim]")
 
-        self.console.print(f"[dim]Safety thresholds: Max disk usage {max_disk_usage}%, Min free space {min_free_space}GB[/dim]")
+        # Display disk usage threshold information
+        if watermark_override:
+            self.console.print(f"[yellow]Disk usage threshold: {max_disk_usage:.1f}% (auto-adjusted from {original_max_disk_usage:.1f}% based on cluster watermarks)[/yellow]")
+            if watermark_config.get('threshold_enabled', True):
+                low_watermark = watermark_config.get('watermarks', {}).get('low', '85%')
+                self.console.print(f"[dim]Cluster low watermark: {low_watermark}, using safety buffer[/dim]")
+            else:
+                self.console.print(f"[dim]Watermarks disabled, using conservative default[/dim]")
+        else:
+            self.console.print(f"[dim]Max disk usage threshold: {max_disk_usage:.1f}%[/dim]")
+        
+        self.console.print(f"[dim]Min free space: {min_free_space}GB[/dim]")
 
         if dry_run:
             self.console.print("[green]Running in DRY RUN mode - no SQL commands will be generated[/green]")
@@ -264,6 +287,15 @@ class OperationsCommands(BaseCommand):
             self._handle_auto_execution(recommendations, validate)
         else:
             self.console.print("[yellow]⚠️  Commands generated. Review carefully before execution.[/yellow]")
+            self.console.print()
+            self.console.print("[bold red]🚨 IMPORTANT: Cluster Rebalancing Management[/bold red]")
+            self.console.print("[yellow]Before executing manual shard moves, consider disabling automatic rebalancing:[/yellow]")
+            self.console.print("[cyan]SET GLOBAL PERSISTENT \"cluster.routing.rebalance.enable\"='none';[/cyan]")
+            self.console.print()
+            self.console.print("[yellow]After completing your moves, re-enable rebalancing:[/yellow]") 
+            self.console.print("[cyan]SET GLOBAL PERSISTENT \"cluster.routing.rebalance.enable\"='all';[/cyan]")
+            self.console.print()
+            self.console.print("[dim]This prevents CrateDB's automatic rebalancer from interfering with your manual moves.[/dim]")
             self.console.print("[dim]Tip: Copy and paste commands into CrateDB admin interface or use crash CLI[/dim]")
 
     def _create_recommendations_table(self, title):
@@ -323,11 +355,34 @@ class OperationsCommands(BaseCommand):
             return
 
         analyzer = ShardAnalyzer(self.client)
+        
+        # Get cluster watermark configuration and calculate effective disk usage threshold
+        watermark_config = self.client.get_cluster_watermark_config()
+        effective_max_disk_usage = get_effective_disk_usage_threshold(watermark_config)
+        
+        # Use the lower of user-specified or watermark-based threshold
+        if max_disk_usage > effective_max_disk_usage:
+            original_max_disk_usage = max_disk_usage
+            max_disk_usage = effective_max_disk_usage
+            watermark_override = True
+        else:
+            watermark_override = False
 
         self.console.print(Panel.fit(f"[bold blue]Validating Shard Move[/bold blue]"))
         self.console.print(f"[dim]Table: {schema_table}, Shard: {shard_id}[/dim]")
         self.console.print(f"[dim]From: {from_node} → To: {to_node}[/dim]")
-        self.console.print(f"[dim]Max disk usage threshold: {max_disk_usage}%[/dim]")
+        
+        # Display disk usage threshold information
+        if watermark_override:
+            self.console.print(f"[yellow]Disk usage threshold: {max_disk_usage:.1f}% (auto-adjusted from {original_max_disk_usage:.1f}% based on cluster watermarks)[/yellow]")
+            if watermark_config.get('threshold_enabled', True):
+                low_watermark = watermark_config.get('watermarks', {}).get('low', '85%')
+                self.console.print(f"[dim]Cluster low watermark: {low_watermark}, using safety buffer[/dim]")
+            else:
+                self.console.print(f"[dim]Watermarks disabled, using conservative default[/dim]")
+        else:
+            self.console.print(f"[dim]Max disk usage threshold: {max_disk_usage:.1f}%[/dim]")
+        
         self.console.print()
 
         try:
@@ -463,7 +518,7 @@ def create_operations_commands(main_cli):
     @click.option('--zone-tolerance', default=10.0, help='Zone balance tolerance percentage (default: 10)')
     @click.option('--min-free-space', default=100.0, help='Minimum free space required on target nodes in GB (default: 100)')
     @click.option('--max-moves', default=10, help='Maximum number of move recommendations (default: 10)')
-    @click.option('--max-disk-usage', default=90.0, help='Maximum disk usage percentage for target nodes (default: 90)')
+    @click.option('--max-disk-usage', default=95.0, help='Maximum disk usage percentage for target nodes (default: 95, auto-adjusted based on watermarks)')
     @click.option('--validate/--no-validate', default=True, help='Validate move safety (default: True)')
     @click.option('--prioritize-space/--prioritize-zones', default=False, help='Prioritize available space over zone balancing (default: False)')
     @click.option('--dry-run/--execute', default=True, help='Show what would be done without generating SQL commands (default: True)')
@@ -486,7 +541,7 @@ def create_operations_commands(main_cli):
     @click.argument('shard_id', type=int)
     @click.argument('from_node')
     @click.argument('to_node')
-    @click.option('--max-disk-usage', default=90.0, help='Maximum disk usage percentage for target node (default: 90)')
+    @click.option('--max-disk-usage', default=95.0, help='Maximum disk usage percentage for target node (default: 95, auto-adjusted based on watermarks)')
     @click.pass_context
     def validate_move(ctx, schema_table: str, shard_id: int, from_node: str, to_node: str, max_disk_usage: float):
         """Validate a specific shard move before execution

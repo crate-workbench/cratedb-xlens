@@ -215,7 +215,7 @@ Generates intelligent shard movement recommendations for cluster rebalancing.
 - `--zone-tolerance`: Zone balance tolerance percentage (default: 10)
 - `--min-free-space`: Minimum free space required on target nodes in GB (default: 100)
 - `--max-moves`: Maximum number of move recommendations (default: 10)
-- `--max-disk-usage`: Maximum disk usage percentage for target nodes (default: 85)
+- `--max-disk-usage`: Maximum disk usage percentage for target nodes (default: 95, auto-adjusted based on watermarks)
 - `--validate/--no-validate`: Validate move safety (default: True)
 - `--prioritize-space/--prioritize-zones`: Prioritize available space over zone balancing (default: False)
 - `--dry-run/--execute`: Show what would be done without generating SQL commands (default: True)
@@ -238,6 +238,42 @@ xmover recommend --prioritize-space --min-size 30 --max-size 60 --node data-hot-
 # Allow higher disk usage for urgent moves
 xmover recommend --prioritize-space --max-disk-usage 90
 ```
+
+**⚠️ IMPORTANT: Cluster Rebalancing Management**
+
+Before executing manual shard moves with `--execute`, disable CrateDB's automatic rebalancing to prevent conflicts:
+
+```sql
+SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"='none';
+```
+
+After completing your moves, re-enable rebalancing:
+
+```sql
+SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"='all';
+```
+
+This prevents the automatic rebalancer from interfering with your manual moves. See `MANUAL_SHARD_MANAGEMENT_GUIDE.md` for comprehensive operational procedures.
+
+**💡 Smart Disk Usage Thresholds**
+
+XMover automatically uses your cluster's disk watermark settings to determine safe disk usage thresholds:
+
+```bash
+# XMover queries your cluster's watermark configuration
+SELECT settings['cluster']['routing']['allocation']['disk']['watermark'] FROM sys.cluster;
+SELECT settings['cluster']['routing']['allocation']['disk']['threshold_enabled'] FROM sys.cluster;
+
+# Example: Cluster with 85% low watermark → XMover uses 83% threshold (with 2% safety buffer)
+xmover recommend --max-disk-usage 90  # Auto-adjusted to 83% with warning
+xmover recommend --max-disk-usage 80  # Used as-is (within safe limits)
+```
+
+**Benefits:**
+- **Cluster-Aware**: Respects your specific watermark configuration
+- **Safety Buffer**: Maintains 2% buffer below low watermark  
+- **User Override**: Honors lower user-specified values
+- **Automatic Adjustment**: Shows clear warnings when adjusting thresholds
 
 ### `zone-analysis`
 Provides detailed analysis of zone distribution and potential conflicts.

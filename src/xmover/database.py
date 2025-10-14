@@ -585,6 +585,53 @@ class CrateDBClient:
         except Exception:
             return {}
     
+    def get_cluster_watermark_config(self) -> Dict[str, Any]:
+        """Get complete cluster disk watermark configuration including threshold enabled status"""
+        watermark_query = """
+        SELECT settings['cluster']['routing']['allocation']['disk']['watermark']
+        FROM sys.cluster
+        """
+        
+        threshold_query = """
+        SELECT settings['cluster']['routing']['allocation']['disk']['threshold_enabled']
+        FROM sys.cluster
+        """
+        
+        try:
+            # Get watermark settings
+            watermark_result = self.execute_query(watermark_query)
+            threshold_result = self.execute_query(threshold_query)
+            
+            watermarks = {}
+            threshold_enabled = False
+            
+            if watermark_result.get('rows'):
+                watermarks = watermark_result['rows'][0][0] or {}
+            
+            if threshold_result.get('rows'):
+                threshold_enabled = threshold_result['rows'][0][0] or False
+                
+            return {
+                'threshold_enabled': threshold_enabled,
+                'watermarks': {
+                    'low': watermarks.get('low', '85%'),
+                    'high': watermarks.get('high', '90%'), 
+                    'flood_stage': watermarks.get('flood_stage', '95%'),
+                    'enable_for_single_data_node': watermarks.get('enable_for_single_data_node', False)
+                }
+            }
+        except Exception:
+            # Return defaults if query fails
+            return {
+                'threshold_enabled': True,
+                'watermarks': {
+                    'low': '85%',
+                    'high': '90%',
+                    'flood_stage': '95%',
+                    'enable_for_single_data_node': False
+                }
+            }
+    
     def get_master_node_id(self) -> Optional[str]:
         """Get the current master node ID from sys.cluster"""
         query = """
