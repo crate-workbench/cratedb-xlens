@@ -106,6 +106,70 @@ class TestPartitionBugFixes:
         assert move_without_partition.full_table_identifier == "users"
 
     @pytest.mark.partition
+    def test_move_recommendation_to_sql_partition_support(self):
+        """Test that MoveRecommendation.to_sql() generates correct SQL for partitioned tables"""
+        
+        # Test partitioned table - should include PARTITION clause
+        partitioned_rec = MoveRecommendation(
+            table_name="shipmentFormFieldData",
+            schema_name="TURVO",
+            shard_id=4,
+            from_node="data-hot-6",
+            to_node="data-hot-5",
+            from_zone="zone1",
+            to_zone="zone2",
+            shard_type="PRIMARY",
+            size_gb=45.5,
+            reason="Balancing",
+            partition_ident="04732d1234abcd",
+            partition_values='("id_ts_month"=1754006400000)'
+        )
+        
+        sql = partitioned_rec.to_sql()
+        expected = 'ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1754006400000) REROUTE MOVE SHARD 4 FROM \'data-hot-6\' TO \'data-hot-5\';'
+        assert sql == expected, f"Expected: {expected}, Got: {sql}"
+        
+        # Test non-partitioned table - should NOT include PARTITION clause
+        non_partitioned_rec = MoveRecommendation(
+            table_name="users",
+            schema_name="doc",
+            shard_id=1,
+            from_node="node-a",
+            to_node="node-b",
+            from_zone="zone1",
+            to_zone="zone2",
+            shard_type="REPLICA",
+            size_gb=10.0,
+            reason="Load balance",
+            partition_ident=None,
+            partition_values=None
+        )
+        
+        sql = non_partitioned_rec.to_sql()
+        expected = 'ALTER TABLE "doc"."users" REROUTE MOVE SHARD 1 FROM \'node-a\' TO \'node-b\';'
+        assert sql == expected, f"Expected: {expected}, Got: {sql}"
+        
+        # Test empty partition_values - should behave like non-partitioned
+        empty_partition_rec = MoveRecommendation(
+            table_name="testTable",
+            schema_name="doc",
+            shard_id=2,
+            from_node="node-x",
+            to_node="node-y",
+            from_zone="zone1",
+            to_zone="zone2",
+            shard_type="PRIMARY",
+            size_gb=5.0,
+            reason="Test",
+            partition_ident="some_ident",
+            partition_values=""  # Empty string
+        )
+        
+        sql = empty_partition_rec.to_sql()
+        expected = 'ALTER TABLE "doc"."testTable" REROUTE MOVE SHARD 2 FROM \'node-x\' TO \'node-y\';'
+        assert sql == expected, f"Expected: {expected}, Got: {sql}"
+
+    @pytest.mark.partition
     def test_get_shards_info_includes_partition_ident(self):
         """Test that get_shards_info query includes partition_ident"""
         

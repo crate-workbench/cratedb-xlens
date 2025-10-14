@@ -5,6 +5,119 @@ This module contains shared utility functions used across the XMover application
 including formatting functions for displaying data in the CLI.
 """
 
+from typing import Dict, Any, Tuple
+
+
+def parse_watermark_percentage(watermark_value: str) -> float:
+    """Parse watermark percentage from string like '85%' or '0.85'"""
+    try:
+        if isinstance(watermark_value, str):
+            if watermark_value.endswith('%'):
+                parsed_value = float(watermark_value[:-1])
+                # Reject negative values
+                if parsed_value < 0:
+                    return 85.0
+                return parsed_value
+            else:
+                # Handle decimal format like '0.85'
+                decimal_value = float(watermark_value)
+                # Reject negative values
+                if decimal_value < 0:
+                    return 85.0
+                if decimal_value <= 1.0:
+                    return decimal_value * 100
+                return decimal_value
+        elif isinstance(watermark_value, (int, float)):
+            # Reject negative values
+            if watermark_value < 0:
+                return 85.0
+            if watermark_value <= 1.0:
+                return watermark_value * 100
+            return watermark_value
+        else:
+            # Default to common values if parsing fails
+            return 85.0  # Default low watermark
+    except (ValueError, TypeError):
+        # Default to common values if parsing fails
+        return 85.0  # Default low watermark
+
+
+def get_effective_disk_usage_threshold(watermark_config: Dict[str, Any], safety_buffer_percent: float = 2.0) -> float:
+    """
+    Get the effective disk usage threshold based on cluster watermark settings
+    
+    Args:
+        watermark_config: Watermark configuration from get_cluster_watermark_config()
+        safety_buffer_percent: Safety buffer below low watermark (default: 2%)
+        
+    Returns:
+        Maximum disk usage percentage to use for moves (with safety buffer)
+    """
+    # Handle empty or missing config
+    if not watermark_config or not watermark_config.get('threshold_enabled', True):
+        # If watermarks are disabled or config missing, use a conservative default
+        return 85.0
+    
+    watermarks = watermark_config.get('watermarks', {})
+    if not watermarks:
+        # If no watermark settings, use conservative default
+        return 85.0
+        
+    low_watermark_str = watermarks.get('low', '85%')
+    
+    # Parse the low watermark percentage
+    low_watermark_percent = parse_watermark_percentage(low_watermark_str)
+    
+    # Apply safety buffer - ensure we don't get too close to the watermark
+    effective_threshold = max(low_watermark_percent - safety_buffer_percent, 75.0)
+    
+    return effective_threshold
+
+
+def calculate_watermark_remaining_space(node_total_bytes: int, node_used_bytes: int, 
+                                       watermark_config: Dict[str, Any]) -> Dict[str, float]:
+    """
+    Calculate remaining space until various watermarks are reached
+    
+    Args:
+        node_total_bytes: Total disk space on node in bytes
+        node_used_bytes: Currently used disk space in bytes
+        watermark_config: Watermark configuration from get_cluster_watermark_config()
+        
+    Returns:
+        Dictionary with remaining space in GB until each watermark
+    """
+    if not watermark_config.get('threshold_enabled', True):
+        # If watermarks disabled, return very high remaining space
+        return {
+            'remaining_to_low_gb': 999999.0,
+            'remaining_to_high_gb': 999999.0,
+            'remaining_to_flood_gb': 999999.0
+        }
+    
+    watermarks = watermark_config.get('watermarks', {})
+    
+    # Parse watermark percentages
+    low_percent = parse_watermark_percentage(watermarks.get('low', '85%'))
+    high_percent = parse_watermark_percentage(watermarks.get('high', '90%'))
+    flood_percent = parse_watermark_percentage(watermarks.get('flood_stage', '95%'))
+    
+    # Calculate bytes at each watermark
+    low_used_bytes = node_total_bytes * (low_percent / 100.0)
+    high_used_bytes = node_total_bytes * (high_percent / 100.0)
+    flood_used_bytes = node_total_bytes * (flood_percent / 100.0)
+    
+    # Calculate remaining space (can be negative if already exceeded)
+    remaining_to_low_gb = max(0, (low_used_bytes - node_used_bytes) / (1024**3))
+    remaining_to_high_gb = max(0, (high_used_bytes - node_used_bytes) / (1024**3))
+    remaining_to_flood_gb = max(0, (flood_used_bytes - node_used_bytes) / (1024**3))
+    
+    return {
+        'remaining_to_low_gb': remaining_to_low_gb,
+        'remaining_to_high_gb': remaining_to_high_gb,
+        'remaining_to_flood_gb': remaining_to_flood_gb
+    }
+
 
 def format_size(size_gb: float) -> str:
     """Format size in GB with appropriate precision"""

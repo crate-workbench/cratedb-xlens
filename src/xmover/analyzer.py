@@ -8,6 +8,7 @@ from collections import defaultdict
 import math
 
 from .database import CrateDBClient, NodeInfo, ShardInfo, RecoveryInfo
+from .utils import calculate_watermark_remaining_space, parse_watermark_percentage, get_effective_disk_usage_threshold
 
 
 @dataclass
@@ -39,9 +40,15 @@ class MoveRecommendation:
 
     def to_sql(self) -> str:
         """Generate the SQL command for this move"""
-        return (f'ALTER TABLE "{self.schema_name}"."{self.table_name}" '
-                f"REROUTE MOVE SHARD {self.shard_id} "
-                f"FROM '{self.from_node}' TO '{self.to_node}';")
+        if self.partition_values and self.partition_values.strip():
+            return (f'ALTER TABLE "{self.schema_name}"."{self.table_name}" '
+                    f"PARTITION {self.partition_values} "
+                    f"REROUTE MOVE SHARD {self.shard_id} "
+                    f"FROM '{self.from_node}' TO '{self.to_node}';")
+        else:
+            return (f'ALTER TABLE "{self.schema_name}"."{self.table_name}" '
+                    f"REROUTE MOVE SHARD {self.shard_id} "
+                    f"FROM '{self.from_node}' TO '{self.to_node}';")
 
     @property
     def safety_score(self) -> float:
@@ -1069,7 +1076,8 @@ class ShardAnalyzer:
     def get_cluster_overview(self) -> Dict[str, Any]:
         """Get a comprehensive overview of the cluster"""
         # Get cluster watermark settings
-        watermarks = self.client.get_cluster_watermarks()
+        watermark_config = self.client.get_cluster_watermark_config()
+        watermarks = watermark_config.get('watermarks', {})
 
         overview = {
             'nodes': len(self.nodes),
@@ -1080,7 +1088,8 @@ class ShardAnalyzer:
             'total_size_gb': sum(s.size_gb for s in self.shards),
             'zone_distribution': defaultdict(int),
             'node_health': [],
-            'watermarks': watermarks
+            'watermarks': watermarks,
+            'watermark_config': watermark_config
         }
 
         # Zone distribution
@@ -1091,7 +1100,7 @@ class ShardAnalyzer:
         # Node health with watermark calculations
         for node in self.nodes:
             node_shards = [s for s in self.shards if s.node_name == node.name]
-            watermark_info = self._calculate_node_watermark_remaining(node, watermarks)
+            watermark_info = calculate_watermark_remaining_space(node.fs_total, node.fs_used, watermark_config)
 
             overview['node_health'].append({
                 'name': node.name,
@@ -1107,48 +1116,7 @@ class ShardAnalyzer:
 
         return overview
 
-    def _calculate_node_watermark_remaining(self, node: 'NodeInfo', watermarks: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate remaining space until watermarks are reached"""
 
-        # Parse watermark percentages
-        low_watermark = self._parse_watermark_percentage(watermarks.get('low', '85%'))
-        high_watermark = self._parse_watermark_percentage(watermarks.get('high', '90%'))
-
-        # Calculate remaining space to each watermark
-        total_space_bytes = node.fs_total
-        current_used_bytes = node.fs_used
-
-        # Space that would be used at each watermark
-        low_watermark_used_bytes = total_space_bytes * (low_watermark / 100.0)
-        high_watermark_used_bytes = total_space_bytes * (high_watermark / 100.0)
-
-        # Remaining space until each watermark (negative if already exceeded)
-        remaining_to_low_gb = max(0, (low_watermark_used_bytes - current_used_bytes) / (1024**3))
-        remaining_to_high_gb = max(0, (high_watermark_used_bytes - current_used_bytes) / (1024**3))
-
-        return {
-            'remaining_to_low_gb': remaining_to_low_gb,
-            'remaining_to_high_gb': remaining_to_high_gb
-        }
-
-    def _parse_watermark_percentage(self, watermark_value: str) -> float:
-        """Parse watermark percentage from string like '85%' or '0.85'"""
-        if isinstance(watermark_value, str):
-            if watermark_value.endswith('%'):
-                return float(watermark_value[:-1])
-            else:
-                # Handle decimal format like '0.85'
-                decimal_value = float(watermark_value)
-                if decimal_value <= 1.0:
-                    return decimal_value * 100
-                return decimal_value
-        elif isinstance(watermark_value, (int, float)):
-            if watermark_value <= 1.0:
-                return watermark_value * 100
-            return watermark_value
-        else:
-            # Default to common values if parsing fails
-            return 85.0  # Default low watermark
 
     def plan_node_decommission(self, node_name: str,
                               min_free_space_gb: float = 100.0) -> Dict[str, Any]:
