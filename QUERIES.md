@@ -18,6 +18,7 @@ select node['name'], sum(size) / 1024^3, count(id)  from sys.shards  group by 1 
 +--------------+-----------------------------+-----------+
 SELECT 8 rows in set (0.061 sec)
 ```
+
 ## Shard Distribution PRIMARY/REPLICAS over nodes
 
 ```sql
@@ -85,10 +86,12 @@ SELECT 8 rows in set (0.062 sec)
 ```
 
 ## Move REROUTE
+
 ```sql
 
 alter table "curvo"."bottlefieldData" reroute move shard 21 from 'data-hot-2' to 'data-hot-3';
 ```
+
 ---
 
 ```sql
@@ -173,6 +176,13 @@ ORDER BY zone, shard_type DESC;
 ## Relocation
 
 ```sql
+cr> select node['name'], id, recovery['stage'], recovery['size'], routing_state, state, primary, table_name, relocating_node, size / 1024^3 as size_gb, partition_ident
+            from sys.shards
+            where routing_state in ('RELOCATING', 'INITIALIZING')
+            order by id;
+```
+
+```sql
 SELECT
         table_name,
         shard_id,
@@ -216,32 +226,33 @@ SELECT
 
 ´´´sql
 WITH largest_tables AS (
-        SELECT
-            schema_name,
-            table_name,
-            SUM(CASE WHEN "primary" = true THEN size ELSE 0 END) as total_primary_size
-        FROM sys.shards
-        WHERE schema_name NOT IN ('sys', 'information_schema', 'pg_catalog')
-        GROUP BY schema_name, table_name
-        ORDER BY total_primary_size DESC
-        LIMIT 10
-    )
-    SELECT
-        s.schema_name,
-        s.table_name,
-        s.node['name'] as node_name,
-        COUNT(CASE WHEN s."primary" = true THEN 1 END) as primary_shards,
-        COUNT(CASE WHEN s."primary" = false THEN 1 END) as replica_shards,
-        COUNT(*) as total_shards,
-        ROUND(SUM(s.size) / 1024.0 / 1024.0 / 1024.0, 2) as total_size_gb,
-        ROUND(SUM(CASE WHEN s."primary" = true THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as primary_size_gb,
-        ROUND(SUM(CASE WHEN s."primary" = false THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as replica_size_gb,
-        SUM(s.num_docs) as total_documents
-    FROM sys.shards s
-    INNER JOIN largest_tables lt ON (s.schema_name = lt.schema_name AND s.table_name = lt.table_name)
-    GROUP BY s.schema_name, s.table_name, s.node['name']
-    ORDER BY s.schema_name, s.table_name, s.node['name'];
-```
+SELECT
+schema_name,
+table_name,
+SUM(CASE WHEN "primary" = true THEN size ELSE 0 END) as total_primary_size
+FROM sys.shards
+WHERE schema_name NOT IN ('sys', 'information_schema', 'pg_catalog')
+GROUP BY schema_name, table_name
+ORDER BY total_primary_size DESC
+LIMIT 10
+)
+SELECT
+s.schema_name,
+s.table_name,
+s.node['name'] as node_name,
+COUNT(CASE WHEN s."primary" = true THEN 1 END) as primary_shards,
+COUNT(CASE WHEN s."primary" = false THEN 1 END) as replica_shards,
+COUNT(\*) as total_shards,
+ROUND(SUM(s.size) / 1024.0 / 1024.0 / 1024.0, 2) as total_size_gb,
+ROUND(SUM(CASE WHEN s."primary" = true THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as primary_size_gb,
+ROUND(SUM(CASE WHEN s."primary" = false THEN s.size ELSE 0 END) / 1024.0 / 1024.0 / 1024.0, 2) as replica_size_gb,
+SUM(s.num_docs) as total_documents
+FROM sys.shards s
+INNER JOIN largest_tables lt ON (s.schema_name = lt.schema_name AND s.table_name = lt.table_name)
+GROUP BY s.schema_name, s.table_name, s.node['name']
+ORDER BY s.schema_name, s.table_name, s.node['name'];
+
+````
 
 # Shard Distribution
 
@@ -268,7 +279,7 @@ SELECT
             WHEN '10GB-50GB' THEN 4
             ELSE 5
         END;
-```
+````
 
 ## Shard Distribution by Node
 
@@ -292,6 +303,7 @@ SELECT
 ```
 
 ## Active Shard detection
+
 ```sql
 
 SELECT
@@ -356,7 +368,6 @@ SELECT
 
 ```
 
-
 # Segements per Shard
 
 ```sql
@@ -420,7 +431,6 @@ cr>
 SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipmentFormFieldData' AND array_length(retention_leases['leases'], 1) > 1 order by 1;
 ```
 
-
 #### list partition ids
 
 ```sql
@@ -438,12 +448,12 @@ cr> SELECT partition_ident, values
 | 04732dhk60sjid9i60o30c1g | {"id_ts_month": 1640995200000} |
 ```
 
-cr> SELECT partition_ident, values
-    FROM information_schema.table_partitions
-    WHERE table_schema = 'TURVO'
-      AND table_name = 'shipmentFormFieldData' limit 100;
+cr> SELECT partition*ident, values
+FROM information_schema.table_partitions
+WHERE table_schema = 'TURVO'
+AND table_name = 'shipmentFormFieldData' limit 100;
 +--------------------------+--------------------------------+
-| partition_ident          | values                         |
+| partition_ident | values |
 +--------------------------+--------------------------------+
 | 04732dhi6srjedhg60o30c1g | {"id_ts_month": 1627776000000} |
 | 04732d9o60qj2d9i60o30c1g | {"id_ts_month": 1580515200000} |
@@ -492,7 +502,7 @@ cr> SELECT partition_ident, values
 | 04732dhg74q3ae9i60o30c1g | {"id_ts_month": 1609459200000} |
 | 04732dhl74pj2chg60o30c1g | {"id_ts_month": 1659312000000} |
 | 04732dpi6srj8c1o60o30c1g | {"id_ts_month": 1727740800000} |
-*| 04732dpl6go30dhk60o30c1g | {"id_ts_month": 1754006400000} |
+*| 04732dpl6go30dhk60o30c1g | {"id*ts_month": 1754006400000} |
 | 04732dhp70rjidho60o30c1g | {"id_ts_month": 1698796800000} |
 | 04732dhi68qj0d9m60o30c1g | {"id_ts_month": 1622505600000} |
 | 04732d9p6cqjcc9m60o30c1g | {"id_ts_month": 1593561600000} |
@@ -520,7 +530,6 @@ SELECT 68 rows in set (0.006 sec)
 
 SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"='xxx'; -- all / none
 [data-hot-7] updating [cluster.routing.rebalance.enable] from [all] to [none]`
-
 
 ### Report on schema, tables, sizes, ...
 
@@ -561,8 +570,9 @@ JOIN tables t ON s.table_name = t.table_name AND s.table_schema = t.table_schema
 ORDER BY table_schema, table_name, partition_ident
 ```
 
-----
-partition_ident          | values                         |
+---
+
+partition_ident | values |
 +--------------------------+--------------------------------+
 | 04732dhp6ooj2e1k60o30c1g | {"id_ts_month": 1696118400000} |
 | 04732dpk60rjgdpi60o30c1g | {"id_ts_month": 1740787200000} |
@@ -608,7 +618,6 @@ partition_ident          | values                         |
 | 04732dho60pj0dpi60o30c1g | {"id_ts_month": 1680307200000} |
 +--------------------------+--------------------------------+
 
-
 ## set translog_flush_size
 
 ```sql
@@ -622,7 +631,6 @@ SELECT
 ```
 
 ## Cluster Health
-
 
 ```sql
 
@@ -686,4 +694,133 @@ other_underreplicated_shards  | NULL
 total_tables                  | 590
 total_partitions              | 100
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+```
+
+## Segements
+
+Careful these are expensive.
+
+```sql
+
+cr> SELECT
+        table_schema,
+        table_name,
+        shard_id,
+        partition_ident,
+        node['name'] AS node,
+        COUNT(*) AS num_segments,
+        SUM(size) AS total_size_bytes,
+        SUM(num_docs) AS total_docs,
+        SUM(deleted_docs) AS total_deleted_docs,
+        ROUND(
+            CASE
+                WHEN SUM(num_docs) + SUM(deleted_docs) = 0 THEN 0
+                ELSE SUM(deleted_docs) * 100.0 / (SUM(num_docs) + SUM(deleted_docs))
+            END,
+        2) AS deleted_ratio
+    FROM sys.segments
+    WHERE table_schema = 'replication_first_materialized'
+      AND table_name = 'orders_external_ids'
+      AND shard_id IN (0,1,2,3,4)
+    GROUP BY node['name'], table_schema, table_name, shard_id, partition_ident
+    ORDER BY table_schema, table_name, deleted_ratio DESC;
+
++--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
+| table_schema                   | table_name          | shard_id | partition_ident | node        | num_segments | total_size_bytes | total_docs | total_deleted_docs | deleted_ratio |
++--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
+| replication_first_materialized | orders_external_ids |        0 |                 | data-hot-10 |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
+| replication_first_materialized | orders_external_ids |        0 |                 | data-hot-5  |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
+| replication_first_materialized | orders_external_ids |        2 |                 | data-hot-3  |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
+| replication_first_materialized | orders_external_ids |        2 |                 | data-hot-11 |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
+| replication_first_materialized | orders_external_ids |        3 |                 | data-hot-2  |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
+| replication_first_materialized | orders_external_ids |        3 |                 | data-hot-11 |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
+| replication_first_materialized | orders_external_ids |        4 |                 | data-hot-7  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
+| replication_first_materialized | orders_external_ids |        4 |                 | data-hot-8  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
+| replication_first_materialized | orders_external_ids |        1 |                 | data-hot-5  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
+| replication_first_materialized | orders_external_ids |        1 |                 | data-hot-3  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
++--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
+```
+
+```sql
+
+cr> SELECT
+        table_schema,
+        table_name,
+        shard_id, segment_name,
+        partition_ident,
+        node['name'] AS node,
+        COUNT(*) AS num_segments,
+        SUM(size) AS total_size_bytes,
+        SUM(num_docs) AS total_docs,
+        SUM(deleted_docs) AS total_deleted_docs,
+        ROUND(
+            CASE
+                WHEN SUM(num_docs) + SUM(deleted_docs) = 0 THEN 0
+                ELSE SUM(deleted_docs) * 100.0 / (SUM(num_docs) + SUM(deleted_docs))
+            END,
+        2) AS deleted_ratio
+    FROM sys.segments
+    WHERE table_schema = 'replication_first_materialized'
+      AND table_name = 'orders_items'
+      AND shard_id IN (0)
+    GROUP BY node['name'], table_schema, segment_name, shard_id, table_name, partition_ident
+    ORDER BY table_schema, table_name, deleted_ratio DESC;
+
++--------------------------------+--------------+----------+--------------+-----------------+------------+--------------+------------------+------------+--------------------+---------------+
+| table_schema                   | table_name   | shard_id | segment_name | partition_ident | node       | num_segments | total_size_bytes | total_docs | total_deleted_docs | deleted_ratio |
++--------------------------------+--------------+----------+--------------+-----------------+------------+--------------+------------------+------------+--------------------+---------------+
+| replication_first_materialized | orders_items |        0 | _yb5         |                 | data-hot-2 |            1 |          3540107 |       4725 |              27740 |         85.45 |
+| replication_first_materialized | orders_items |        0 | _yb5         |                 | data-hot-8 |            1 |          3540107 |       4725 |              27740 |         85.45 |
+| replication_first_materialized | orders_items |        0 | _yci         |                 | data-hot-2 |            1 |         12848803 |      21477 |              28810 |         57.29 |
+| replication_first_materialized | orders_items |        0 | _yci         |                 | data-hot-8 |            1 |         12848803 |      21477 |              28810 |         57.29 |
+| replication_first_materialized | orders_items |        0 | _ybf         |                 | data-hot-2 |            1 |          9122185 |      13905 |              17059 |         55.09 |
+| replication_first_materialized | orders_items |        0 | _ybf         |                 | data-hot-8 |            1 |          9122185 |      13905 |              17059 |         55.09 |
+| replication_first_materialized | orders_items |        0 | _yaw         |                 | data-hot-2 |            1 |         77757363 |     147539 |             177513 |         54.61 |
+| replication_first_materialized | orders_items |        0 | _yaw         |                 | data-hot-8 |            1 |         77757363 |     147539 |             177513 |         54.61 |
+```
+
+## table settings
+
+detect odd max_thread_count
+
+```sql
+SELECT 209 rows in set (0.172 sec)
+cr> SELECT
+      table_schema,
+      table_name,
+      partitioned_by,
+      clustered_by
+      --settings['merge']['scheduler']['max_thread_count'] AS max_thread_count
+    FROM information_schema.tables
+    WHERE clustered_by != '_id';
+
+```
+
+detect custom routing column
+
+```sql
+
+| TURVO        | slotMetaDataDocument_failures                 | NULL           |                1 |
+| TURVO        | tasks_failures_1                              | NULL           |                1 |
+| TURVO        | orderFormFieldData_events                     | ["sync_day"]   |                1 |
+| TURVO        | approvalFormFieldData_transforms              | NULL           |                1 |
++--------------+-----------------------------------------------+----------------+------------------+
+SELECT 158 rows in set (0.261 sec)
+cr> SELECT
+          table_schema,
+          table_name,
+          partitioned_by,
+          settings['merge']['scheduler']['max_thread_count'] AS max_thread_count
+        FROM information_schema.tables
+        WHERE settings['merge']['scheduler']['max_thread_count'] = 1
+```
+
+#### generate reset max_thread_count statements...
+
+```sql
+SELECT
+  'ALTER TABLE "' || table_schema || '"."' || table_name || '" RESET ("merge.scheduler.max_thread_count");' AS reset_statement
+FROM information_schema.tables
+WHERE settings['merge']['scheduler']['max_thread_count'] = 1;
+
 ```

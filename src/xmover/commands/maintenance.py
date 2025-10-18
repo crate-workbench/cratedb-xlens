@@ -468,10 +468,13 @@ class MaintenanceCommands(BaseCommand):
         for shard in individual_shards:
             schema_name = shard['schema_name']
             table_name = shard['table_name']
+            partition_values = shard.get('partition_values')
             shard_id = shard['shard_id']
             node_name = shard['node_name']
 
-            cmd = f'ALTER TABLE "{schema_name}"."{table_name}" REROUTE CANCEL SHARD {shard_id} on \'{node_name}\' WITH (allow_primary=False);'
+            # Include partition clause if this is a partitioned table
+            partition_clause = f' PARTITION {partition_values}' if partition_values else ''
+            cmd = f'ALTER TABLE "{schema_name}"."{table_name}"{partition_clause} REROUTE CANCEL SHARD {shard_id} on \'{node_name}\' WITH (allow_primary=False);'
             reroute_commands.append(cmd)
             self.console.print(cmd)
         self.console.print()
