@@ -646,6 +646,20 @@ class CrateDBClient:
         except Exception:
             return None
     
+    def get_cluster_name(self) -> Optional[str]:
+        """Get the cluster name from sys.cluster"""
+        query = """
+        SELECT name FROM sys.cluster
+        """
+        
+        try:
+            result = self.execute_query(query)
+            if result.get('rows') and result['rows'][0][0]:
+                return result['rows'][0][0]
+            return None
+        except Exception:
+            return None
+    
     def get_active_recoveries(self, table_name: Optional[str] = None,
                             node_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get shards that are currently in recovery states from sys.allocations"""
