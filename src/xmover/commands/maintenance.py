@@ -216,7 +216,7 @@ class MaintenanceCommands(BaseCommand):
             return
 
         self.console.print(Panel.fit(f"[bold blue]Problematic Translog Analysis[/bold blue]"))
-        self.console.print(f"[dim]Analyzing shards with translog uncommitted size ≥ {sizemb} MB[/dim]")
+        self.console.print(f"[dim]Using adaptive thresholds based on table flush_threshold_size settings (≥ {sizemb} MB baseline)[/dim]")
 
         if execute:
             self.console.print("[yellow]⚠️  COMMAND GENERATION MODE - SQL commands will be generated for display[/yellow]")
@@ -226,15 +226,14 @@ class MaintenanceCommands(BaseCommand):
         self.console.print()
 
         try:
-            # Get both individual shards and table summaries
+            # Get both individual shards and table summaries using adaptive thresholds
             individual_shards, summary_rows = self._get_problematic_translogs(sizemb)
 
             if not individual_shards:
-                self.console.print("[green]✅ No shards found with problematic translog sizes[/green]")
-                self.console.print(f"[dim]All shards have translog uncommitted size < {sizemb} MB[/dim]")
+                self.console.print("[green]✅ No problematic translog shards found using adaptive thresholds![/green]")
                 return
 
-            # Display individual problematic shards
+            # Display individual problematic shards with adaptive threshold info
             self._display_individual_problematic_shards(individual_shards, sizemb)
 
             # Display summary by table
@@ -250,7 +249,23 @@ class MaintenanceCommands(BaseCommand):
             self.console.print(f"[red]Error analyzing problematic translogs: {e}[/red]")
 
     def _get_problematic_translogs(self, min_size_mb: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Get individual shards and table summaries with problematic translog sizes"""
+        """Get individual shards and table summaries with problematic translog sizes using adaptive thresholds"""
+
+        # Step 1: Find shards above initial threshold
+        initial_shards, initial_summary = self._get_initial_problematic_translogs(min_size_mb)
+
+        # Step 2: Get table-specific flush thresholds for problematic tables only
+        table_thresholds = self._get_table_flush_thresholds(initial_shards)
+
+        # Step 3: Apply adaptive thresholds and re-filter results
+        adaptive_shards, adaptive_summary = self._apply_adaptive_thresholds(
+            initial_shards, initial_summary, table_thresholds, min_size_mb
+        )
+
+        return adaptive_shards, adaptive_summary
+
+    def _get_initial_problematic_translogs(self, min_size_mb: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Get initial problematic shards using basic threshold"""
 
         # Query for individual problematic shards (for REROUTE CANCEL commands)
         individual_shards_query = """
@@ -348,9 +363,172 @@ class MaintenanceCommands(BaseCommand):
 
         return individual_shard_dicts, summary_dicts
 
+    def _get_table_flush_thresholds(self, individual_shards: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+        """Get flush threshold settings for tables that have problematic shards"""
+
+        if not individual_shards:
+            return {}
+
+        # Get unique table/schema combinations from problematic shards
+        unique_tables = set()
+        table_partitions = set()
+
+        for shard in individual_shards:
+            schema = shard['schema_name']
+            table = shard['table_name']
+            unique_tables.add((schema, table))
+
+            # Also track partitions for partition-specific settings
+            if shard.get('partition_values'):
+                table_partitions.add((schema, table, shard.get('partition_values', '')))
+
+        # Query table-level flush thresholds
+        table_thresholds = {}
+
+        if unique_tables:
+            # Build query for table settings
+            table_conditions = []
+            params = []
+            for schema, table in unique_tables:
+                table_conditions.append("(table_schema = ? AND table_name = ?)")
+                params.extend([schema, table])
+
+            table_query = f"""
+                SELECT
+                    table_schema,
+                    table_name,
+                    COALESCE(settings['translog']['flush_threshold_size'], 536870912) as flush_threshold_bytes
+                FROM information_schema.tables
+                WHERE {' OR '.join(table_conditions)}
+            """
+
+            result = self.client.execute_query(table_query, params)
+            for row in result.get('rows', []):
+                schema, table, threshold_bytes = row
+                table_key = f"{schema}.{table}"
+                config_mb = threshold_bytes / (1024 ** 2)
+                threshold_mb = config_mb * 1.1
+                table_thresholds[table_key] = {
+                    'config_mb': config_mb,
+                    'threshold_mb': threshold_mb
+                }
+
+        # Query partition-level flush thresholds (if different from table)
+        if table_partitions:
+            partition_conditions = []
+            partition_params = []
+            for schema, table, partition_values in table_partitions:
+                if partition_values:  # Only check partitions that actually exist
+                    partition_conditions.append("(table_schema = ? AND table_name = ?)")
+                    partition_params.extend([schema, table])
+
+            if partition_conditions:
+                partition_query = f"""
+                    SELECT
+                        table_schema,
+                        table_name,
+                        translate(values::text, ':{{}}', '=()') as partition_values,
+                        COALESCE(settings['translog']['flush_threshold_size'], 536870912) as flush_threshold_bytes
+                    FROM information_schema.table_partitions
+                    WHERE {' OR '.join(partition_conditions)}
+                """
+
+                result = self.client.execute_query(partition_query, partition_params)
+                for row in result.get('rows', []):
+                    schema, table, partition_values, threshold_bytes = row
+                    partition_key = f"{schema}.{table}.{partition_values}"
+                    config_mb = threshold_bytes / (1024 ** 2)
+                    threshold_mb = config_mb * 1.1
+                    table_thresholds[partition_key] = {
+                        'config_mb': config_mb,
+                        'threshold_mb': threshold_mb
+                    }
+
+        return table_thresholds
+
+    def _apply_adaptive_thresholds(self, initial_shards: List[Dict[str, Any]],
+                                 initial_summary: List[Dict[str, Any]],
+                                 table_thresholds: Dict[str, Dict[str, float]],
+                                 fallback_threshold_mb: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Apply adaptive thresholds to filter shards"""
+
+        adaptive_shards = []
+        adaptive_summary = []
+
+        # Filter individual shards using adaptive thresholds
+        for shard in initial_shards:
+            schema = shard['schema_name']
+            table = shard['table_name']
+            partition_values = shard.get('partition_values', '')
+            translog_mb = shard['translog_size_mb']
+
+            # Try partition-specific threshold first, then table-level, then fallback
+            partition_key = f"{schema}.{table}.{partition_values}" if partition_values else None
+            table_key = f"{schema}.{table}"
+
+            threshold_info = None
+            if partition_key and partition_key in table_thresholds:
+                threshold_info = table_thresholds[partition_key]
+            elif table_key in table_thresholds:
+                threshold_info = table_thresholds[table_key]
+
+            if threshold_info:
+                config_mb = threshold_info['config_mb']
+                threshold_mb = threshold_info['threshold_mb']
+            else:
+                config_mb = fallback_threshold_mb
+                threshold_mb = fallback_threshold_mb
+
+            # Keep shard if it exceeds the adaptive threshold
+            if translog_mb > threshold_mb:
+                shard['adaptive_config_mb'] = config_mb
+                shard['adaptive_threshold_mb'] = threshold_mb
+                adaptive_shards.append(shard)
+
+        # Filter summary data - only keep tables that still have problematic shards after adaptive filtering
+        adaptive_table_keys = set()
+        for shard in adaptive_shards:
+            schema = shard['schema_name']
+            table = shard['table_name']
+            partition_values = shard.get('partition_values', '')
+            key = f"{schema}.{table}.{partition_values}" if partition_values else f"{schema}.{table}"
+            adaptive_table_keys.add(key)
+
+        for summary in initial_summary:
+            schema = summary['schema_name']
+            table = summary['table_name']
+            partition_values = summary.get('partition_values', '')
+            summary_key = f"{schema}.{table}.{partition_values}" if partition_values else f"{schema}.{table}"
+
+            if summary_key in adaptive_table_keys:
+                adaptive_summary.append(summary)
+
+        return adaptive_shards, adaptive_summary
+
     def _display_individual_problematic_shards(self, individual_shards: List[Dict[str, Any]], min_size_mb: int) -> None:
         """Display individual problematic shards for REROUTE CANCEL commands"""
-        self.console.print(f"[bold]Problematic Replica Shards (translog > {min_size_mb}MB)[/bold]")
+        self.console.print(f"[bold]Problematic Replica Shards (adaptive thresholds)[/bold]")
+
+        # Display threshold information
+        if individual_shards and any(shard.get('adaptive_threshold_mb') for shard in individual_shards):
+            self.console.print("[dim]Threshold Analysis:[/dim]")
+            unique_thresholds = {}
+            for shard in individual_shards:
+                schema = shard['schema_name']
+                table = shard['table_name']
+                partition = shard.get('partition_values', '')
+                config_mb = shard.get('adaptive_config_mb', min_size_mb)
+                threshold_mb = shard.get('adaptive_threshold_mb', min_size_mb)
+                
+                if partition:
+                    key = f"{schema}.{table} {partition}"
+                else:
+                    key = f"{schema}.{table}"
+                unique_thresholds[key] = (config_mb, threshold_mb)
+
+            for table_key, (config_mb, threshold_mb) in sorted(unique_thresholds.items()):
+                self.console.print(f"[dim]├─ {table_key}: {config_mb:.0f}MB/{threshold_mb:.0f}MB config/threshold[/dim]")
+            self.console.print()
 
         individual_table = Table(box=box.ROUNDED)
         individual_table.add_column("Schema", style="cyan")
@@ -359,16 +537,19 @@ class MaintenanceCommands(BaseCommand):
         individual_table.add_column("Shard ID", justify="right", style="yellow")
         individual_table.add_column("Node", style="green")
         individual_table.add_column("Translog MB", justify="right", style="red")
+        individual_table.add_column("Threshold MB", justify="right", style="dim")
 
         for shard in individual_shards:
             schema_name = shard['schema_name']
             table_name = shard['table_name']
-            partition_values = shard['partition_values']
+            partition_values = shard.get('partition_values', '')
             shard_id = shard['shard_id']
             node_name = shard['node_name']
             translog_mb = shard['translog_size_mb']
+            threshold_mb = shard.get('adaptive_threshold_mb', min_size_mb)
 
-            partition_display = partition_values if partition_values and partition_values != 'NULL' else "none"
+            # Format partition values for display
+            partition_display = partition_values if partition_values else 'N/A'
 
             individual_table.add_row(
                 schema_name,
@@ -376,7 +557,8 @@ class MaintenanceCommands(BaseCommand):
                 partition_display,
                 str(shard_id),
                 node_name,
-                f"{translog_mb:.1f}"
+                f"{translog_mb:.1f}",
+                f"{threshold_mb:.0f}"
             )
 
         self.console.print(individual_table)
@@ -607,7 +789,7 @@ ORDER BY array_length(retention_leases['leases'], 1);"""
 
         # Get cluster name for display
         cluster_name = self.client.get_cluster_name()
-        
+
         if not short:
             cluster_display = cluster_name or "Unknown"
             self.print_header(f"Pre-Flight Check {cluster_display}: {node}", f"Min-availability: {min_availability.title()}")
@@ -1260,33 +1442,11 @@ def create_maintenance_commands(main_cli):
         maintenance.shard_distribution(top_tables, table)
 
     @main_cli.command()
-    @click.option('--sizeMB', default=300, help='Minimum translog uncommitted size in MB (default: 300)')
+    @click.option('--sizeMB', default=512, help='Minimum translog uncommitted size in MB (default: 512)')
     @click.option('--execute', is_flag=True, help='Generate SQL commands for display (does not execute against database)')
     @click.pass_context
     def problematic_translogs(ctx, sizemb: int, execute: bool):
-        """Find tables with problematic translog sizes and generate comprehensive shard management commands
-
-        This command identifies tables with replica shards that have large uncommitted translog sizes
-        indicating replication issues. It generates a complete sequence including:
-        1. Stop automatic shard rebalancing
-        2. REROUTE CANCEL commands for problematic shards
-        3. REROUTE ALLOCATE commands to recreate replicas
-        4. Re-enable automatic shard rebalancing
-
-        Large translog sizes typically indicate:
-        • Network issues between nodes
-        • Storage performance problems
-        • Node overload or memory pressure
-        • Replication lag or failures
-
-        WARNING: This command only cancels REPLICA shards for safety.
-        Primary shards with large translogs require manual investigation.
-
-        Examples:
-            xmover problematic-translogs                     # Find shards with ≥300MB translogs
-            xmover problematic-translogs --sizeMB 500        # Custom size threshold
-            xmover problematic-translogs --execute           # Generate management commands
-        """
+        """Find tables with problematic translog sizes using adaptive thresholds based on table settings"""
         client = ctx.obj['client']
         maintenance = MaintenanceCommands(client)
         maintenance.problematic_translogs(sizemb, execute)

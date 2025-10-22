@@ -472,40 +472,44 @@ Find tables with problematic translog sizes and generate replica management comm
 
 **Options:**
 
-- `--sizeMB INTEGER`: Minimum translog uncommitted size in MB (default: 300)
+- `--sizeMB INTEGER`: Minimum translog uncommitted size in MB (default: 512)
 - `--execute`: Execute the replica management commands after confirmation
 
 **Description:**
-This command identifies tables with replica shards that have large uncommitted translog sizes indicating replication issues. It shows both individual problematic shards and a summary by table/partition. It generates two types of ALTER commands: individual REROUTE CANCEL SHARD commands for each problematic shard, and replica management commands that temporarily set replicas to 0 and restore them to force recreation of problematic replicas.
+This command uses adaptive thresholds based on table-specific `flush_threshold_size` settings to intelligently identify problematic translog sizes. It queries table settings only for initially problematic tables (performance optimization) and applies table-specific thresholds (110% of configured flush_threshold_size). For partitioned tables, it properly handles partition-specific settings and includes partition information in REROUTE CANCEL commands. It shows both individual problematic shards and a summary by table/partition.
 
 **Examples:**
 
 ```bash
-# Show problematic tables with translog > 300MB (default)
+# Show problematic tables using adaptive thresholds (512MB baseline)
 xmover problematic-translogs
 
-# Show tables with translog > 500MB
+# Show tables using adaptive thresholds with 500MB baseline
 xmover problematic-translogs --sizeMB 500
 
-# Execute replica management commands for tables > 1GB after confirmation
+# Execute replica management commands using adaptive thresholds (1GB baseline)
 xmover problematic-translogs --sizeMB 1000 --execute
 ```
 
 **Sample Output:**
 
 ```
-                   Problematic Replica Shards (translog > 300MB)
-╭────────┬───────────────────────────────┬────────────────────────────┬──────────┬────────────┬─────────────╮
-│ Schema │ Table                         │ Partition                  │ Shard ID │ Node       │ Translog MB │
-├────────┼───────────────────────────────┼────────────────────────────┼──────────┼────────────┼─────────────┤
-│ TURVO  │ shipmentFormFieldData         │ none                       │       14 │ data-hot-6 │      7040.9 │
-│ TURVO  │ shipmentFormFieldData_events  │ ("sync_day"=1757376000000) │        3 │ data-hot-2 │       481.2 │
-│ TURVO  │ orderFormFieldData            │ none                       │        5 │ data-hot-1 │       469.5 │
-╰────────┴───────────────────────────────┴────────────────────────────┴──────────┴────────────┴─────────────╯
+Problematic Replica Shards (adaptive thresholds)
+Threshold Analysis:
+├─ TURVO.shipmentFormFieldData: 2048MB/2253MB config/threshold
+├─ TURVO.orderFormFieldData: 512MB/563MB config/threshold
+
+╭────────┬──────────────────────┬────────────────────────────┬──────────┬────────────┬─────────────┬──────────────╮
+│ Schema │ Table                │ Partition                  │ Shard ID │ Node       │ Translog MB │ Threshold MB │
+├────────┼──────────────────────┼────────────────────────────┼──────────┼────────────┼─────────────┼──────────────┤
+│ TURVO  │ shipmentFormFieldData│ none                       │       14 │ data-hot-6 │      7040.9 │         2253 │
+│ TURVO  │ shipmentFormFieldData│ ("sync_day"=1757376000000) │        3 │ data-hot-2 │       481.2 │         2253 │
+│ TURVO  │ orderFormFieldData   │ none                       │        5 │ data-hot-1 │       469.5 │          563 │
+╰────────┴──────────────────────┴────────────────────────────┴──────────┴────────────┴─────────────┴──────────────╯
 
 Found 2 table/partition(s) with problematic translogs:
 
-              Tables with Problematic Replicas (translog > 300MB)
+              Tables with Problematic Replicas (adaptive thresholds)
 ╭────────┬───────────┬───────────┬───────────┬──────────┬─────────────┬──────────────┬──────────╮
 │ Schema │ Table     │ Partition │ Problema… │ Max      │ Shards      │ Size GB      │ Current  │
 │        │           │           │ Replicas  │ Trans.MB │ (P/R)       │ (P/R)        │ Replicas │
@@ -517,7 +521,7 @@ Found 2 table/partition(s) with problematic translogs:
 Generated ALTER Commands:
 
 ALTER TABLE "TURVO"."shipmentFormFieldData" REROUTE CANCEL SHARD 14 on 'data-hot-6' WITH (allow_primary=False);
-ALTER TABLE "TURVO"."shipmentFormFieldData_events" partition ("sync_day"=1757376000000) REROUTE CANCEL SHARD 3 on 'data-hot-2' WITH (allow_primary=False);
+ALTER TABLE "TURVO"."shipmentFormFieldData_events" PARTITION ("sync_day"=1757376000000) REROUTE CANCEL SHARD 3 on 'data-hot-2' WITH (allow_primary=False);
 ALTER TABLE "TURVO"."orderFormFieldData" REROUTE CANCEL SHARD 5 on 'data-hot-1' WITH (allow_primary=False);
 
 -- Set replicas to 0:
