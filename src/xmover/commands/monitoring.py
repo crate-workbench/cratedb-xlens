@@ -3,12 +3,16 @@ Monitoring commands for XMover CLI - handles cluster monitoring operations
 """
 
 import time
-from typing import Optional
+import signal
+import json
+from datetime import datetime
+from typing import Optional, Dict, List, Any
 import click
 from rich.console import Console
-from rich.table import Table
+# Table import moved to where needed to avoid unused import warning
 from rich.panel import Panel
 from rich import box
+from loguru import logger
 
 from ..analyzer import RecoveryMonitor, ActiveShardMonitor
 from ..utils import format_table_display_with_partition, format_translog_info, format_recovery_progress
@@ -85,6 +89,8 @@ class MonitoringCommands(BaseCommand):
             self.active_shards(**kwargs)
         elif command == "large_translogs":
             self.large_translogs(**kwargs)
+        elif command == "read_check":
+            self.read_check(**kwargs)
         else:
             raise ValueError(f"Unknown monitoring command: {command}")
 
@@ -866,6 +872,546 @@ class MonitoringCommands(BaseCommand):
             import traceback
             console.print(f"[dim]{traceback.format_exc()}[/dim]")
 
+    def read_check(self, ctx, seconds: int):
+        """Monitor cluster data readability by sampling from largest tables
+        
+        This command continuously monitors cluster health by:
+        - Discovering the largest 5 tables/partitions by size
+        - Efficiently querying max(_seq_no) from each table every --seconds (default 30s)
+        - Tracking changes in _seq_no and total_docs
+        - Detecting stale or problematic tables
+        - Providing performance metrics and health scoring
+        
+        Features:
+        - 🟢 Active tables (seq_no changing regularly)
+        - 🟡 Slow tables (minimal activity)
+        - 🔴 Stale tables (no activity detected)
+        - Optimized queries using max() aggregation
+        - Query performance tracking
+        - Baseline anomaly detection
+        - Fresh connections for each check
+        - Exponential backoff retry on errors
+        """
+        
+        # Store monitoring interval for health status calculations
+        self.monitoring_interval = seconds
+        
+        # Setup loguru for this command (first to use it)
+        logger.remove()  # Remove default handler
+        logger.add(
+            lambda msg: self.console.print(msg, end=""),
+            format="{time:HH:mm:ss.SSS} | {level} | {message}",
+            level="INFO"
+        )
+        
+        # Get cluster info
+        cluster_name = self.client.get_cluster_name() or "Unknown"
+        
+        # State tracking
+        stats = {
+            'samples_taken': 0,
+            'changes_detected': 0,
+            'tables_queried': set(),
+            'connection_failures': 0,
+            'query_failures': 0,
+            'start_time': datetime.now()
+        }
+        
+        # Enhanced per-table statistics
+        table_stats = {}  # table_key -> {doc_changes: [deltas], performance: [times], anomalies: count, shard_info: dict}
+        
+        # Data tracking
+        last_discovery = 0
+        table_data = {}  # table_key -> {seq_no, total_docs, last_seen, baseline_activity}
+        discovery_data = []
+        performance_metrics = {}  # table_key -> [response_times]
+        
+        def signal_handler(signum, frame):
+            """Handle CTRL+C gracefully with stats"""
+            self._print_read_check_stats(stats, table_stats, cluster_name)
+            raise KeyboardInterrupt()
+        
+        # Register signal handler
+        signal.signal(signal.SIGINT, signal_handler)
+        
+        try:
+            self._display_read_check_header(cluster_name, seconds)
+            
+            while True:
+                current_time = time.time()
+                
+                # Re-discover largest tables every 10 minutes (600 seconds)
+                if current_time - last_discovery > 600:
+                    new_discovery = self._discover_largest_tables()
+                    if new_discovery != discovery_data:
+                        if discovery_data:  # Not first run
+                            logger.info(f"📋 Table discovery updated - {len(new_discovery)} largest tables identified")
+                        discovery_data = new_discovery
+                        last_discovery = current_time
+                
+                if not discovery_data:
+                    logger.error("❌ No tables found for monitoring")
+                    time.sleep(seconds)
+                    continue
+                
+                # Sample from each discovered table
+                for table_info in discovery_data:
+                    table_key = self._get_table_key(table_info)
+                    stats['tables_queried'].add(table_key)
+                    
+                    success = self._sample_table_data(table_info, table_data, performance_metrics, stats, table_stats)
+                    if success:
+                        stats['samples_taken'] += 1
+                
+                # Sleep until next cycle
+                time.sleep(seconds)
+                
+        except KeyboardInterrupt:
+            pass  # Stats already printed by signal handler
+        except Exception as e:
+            logger.error(f"💥 Unexpected error: {e}")
+            self._print_read_check_stats(stats, table_stats, cluster_name)
+    
+    def _display_read_check_header(self, cluster_name: str, seconds: int):
+        """Display professional header for read-check command"""
+        header_text = f"CrateDB Read Check [{cluster_name}]"
+        subheader = f"Monitoring max(_seq_no) every {seconds}s from largest tables"
+        
+        self.console.print()
+        self.console.print(Panel.fit(
+            f"[bold blue]{header_text}[/bold blue]\n[dim]{subheader}[/dim]",
+            border_style="blue"
+        ))
+        self.console.print()
+        
+        # Show clearer legend separating write activity from query performance
+        activity_legend = "Write Activity: 🟢 Active • 🟡 Slow • 🔴 Stale"
+        performance_legend = "Query Performance: ⚡ >1000ms • ⚠️ Anomaly"
+        self.console.print(f"[dim]{activity_legend}[/dim]")
+        self.console.print(f"[dim]{performance_legend}[/dim]")
+        self.console.print()
+    
+    def _discover_largest_tables(self) -> List[Dict[str, Any]]:
+        """Discover the 5 largest tables/partitions with enhanced query"""
+        discovery_query = """
+        SELECT
+            s.schema_name,
+            s.table_name,
+            s.partition_ident,
+            tp.values AS partition_values,
+            ROUND(SUM(s.size) / 1024 / 1024 / 1024, 2) AS size_gb,
+            SUM(s.num_docs) AS total_docs
+        FROM sys.shards s
+        LEFT JOIN information_schema.table_partitions tp
+            ON s.schema_name = tp.table_schema
+            AND s.table_name = tp.table_name
+            AND s.partition_ident = tp.partition_ident
+        WHERE s.primary = true
+        GROUP BY s.schema_name, s.table_name, s.partition_ident, tp.values
+        ORDER BY size_gb DESC 
+        LIMIT 5
+        """
+        
+        try:
+            # Fresh connection for discovery
+            fresh_client = self._create_fresh_client()
+            result = fresh_client.execute_query(discovery_query)
+            
+            tables = []
+            for row in result.get('rows', []):
+                schema, table, partition_ident, partition_values, size_gb, total_docs = row
+                tables.append({
+                    'schema_name': schema,
+                    'table_name': table,
+                    'partition_ident': partition_ident,
+                    'partition_values': partition_values,
+                    'size_gb': float(size_gb) if size_gb else 0.0,
+                    'total_docs': int(total_docs) if total_docs else 0
+                })
+            
+            return tables
+            
+        except Exception as e:
+            logger.error(f"🔍 Discovery failed: {e}")
+            return []
+    
+    def _sample_table_data(self, table_info: Dict, table_data: Dict, performance_metrics: Dict, 
+                          stats: Dict, table_stats: Dict) -> bool:
+        """Sample data from a specific table with retry logic"""
+        table_key = self._get_table_key(table_info)
+        max_retries = 3
+        retry_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                # Create sample query
+                sample_query = self._build_sample_query(table_info)
+                
+                # Fresh connection for each sample
+                fresh_client = self._create_fresh_client()
+                result = fresh_client.execute_query(sample_query)
+                
+                # Use CrateDB's actual query execution time (avoids RTT)
+                query_time_ms = int(result.get('duration', 0))
+                if table_key not in performance_metrics:
+                    performance_metrics[table_key] = []
+                performance_metrics[table_key].append(query_time_ms)
+                
+                # Keep only last 20 measurements
+                if len(performance_metrics[table_key]) > 20:
+                    performance_metrics[table_key] = performance_metrics[table_key][-20:]
+                
+                # Process results - max() query returns single value
+                rows = result.get('rows', [])
+                if rows and rows[0][0] is not None:
+                    max_seq_no = rows[0][0]  # max() returns single value
+                    self._process_sample_results(table_info, table_key, max_seq_no, table_data, stats, table_stats, query_time_ms)
+                else:
+                    logger.warning(f"🔍 {table_key}: No data returned")
+                
+                # Update table statistics (only if we got valid duration)
+                if query_time_ms > 0:
+                    self._update_table_stats(table_key, table_info, query_time_ms, table_stats)
+                
+                return True
+                
+            except Exception as e:
+                stats['query_failures'] += 1
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ {table_key}: Retry {attempt + 1}/{max_retries} after {retry_delay}s - {e}")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"❌ {table_key}: Failed after {max_retries} attempts - {e}")
+                    return False
+        
+        return False
+    
+    def _build_sample_query(self, table_info: Dict) -> str:
+        """Build the optimized sample query for a table/partition"""
+        schema = table_info['schema_name']
+        table = table_info['table_name']
+        partition_values = table_info.get('partition_values')
+        
+        # Build table reference
+        if schema and schema != "doc":
+            table_ref = f'"{schema}"."{table}"'
+        else:
+            table_ref = f'"{table}"'
+        
+        # Optimized query using max() aggregation
+        query = f"SELECT max(_seq_no) FROM {table_ref}"
+        
+        # Add partition filter if needed
+        if partition_values:
+            try:
+                # Parse partition values (JSON format)
+                partition_dict = json.loads(partition_values)
+                where_clauses = []
+                for key, value in partition_dict.items():
+                    where_clauses.append(f"{key} = {value}")
+                if where_clauses:
+                    query += f" WHERE {' AND '.join(where_clauses)}"
+            except (json.JSONDecodeError, TypeError):
+                # Fallback - skip partition filter if parsing fails
+                pass
+        
+        return query
+    
+    def _process_sample_results(self, table_info: Dict, table_key: str, max_seq_no: int, 
+                               table_data: Dict, stats: Dict, table_stats: Dict, query_time_ms: int):
+        """Process sample results and update tracking data"""
+        current_total_docs = table_info['total_docs']
+        current_time = time.time()
+        
+        # Get previous data
+        prev_data = table_data.get(table_key, {})
+        prev_seq_no = prev_data.get('seq_no')
+        prev_total_docs = prev_data.get('total_docs')
+        prev_time = prev_data.get('last_seen', current_time)
+        
+        # Calculate deltas
+        seq_no_delta = max_seq_no - prev_seq_no if prev_seq_no is not None else 0
+        docs_delta = current_total_docs - prev_total_docs if prev_total_docs is not None else 0
+        
+        # Detect changes
+        has_changes = seq_no_delta != 0 or docs_delta != 0
+        if has_changes and prev_seq_no is not None:
+            stats['changes_detected'] += 1
+        
+        # Determine health status
+        time_since_last = current_time - prev_time if prev_seq_no is not None else 0
+        health_status = self._determine_health_status(seq_no_delta, prev_data, table_data)
+        
+        # Check for anomalies and update counter
+        is_anomaly = self._detect_anomaly(table_key, seq_no_delta, docs_delta, prev_data, table_stats)
+        
+        # Update tracking data
+        table_data[table_key] = {
+            'seq_no': max_seq_no,
+            'total_docs': current_total_docs,
+            'last_seen': current_time,
+            'last_change': current_time if has_changes else prev_data.get('last_change'),
+            'baseline_activity': prev_data.get('baseline_activity', 0) * 0.9 + seq_no_delta * 0.1
+        }
+        
+        # Log result with anomaly indicator
+        anomaly_indicator = " ⚠️" if is_anomaly else ""
+        self._log_sample_result(table_key, seq_no_delta, docs_delta, query_time_ms, health_status + anomaly_indicator)
+    
+    def _determine_health_status(self, seq_no_delta: int, prev_data: Dict, table_data: Dict) -> str:
+        """Determine health status based on activity patterns over time"""
+        if seq_no_delta > 0:
+            return "🟢"  # Active - sequence number changed this check
+        
+        # For tables with no current activity, check historical patterns
+        baseline_activity = prev_data.get('baseline_activity', 0)
+        last_change_time = prev_data.get('last_change')
+        current_time = time.time()
+        
+        # If we've never seen activity, it's just stable (green)
+        if baseline_activity == 0 and last_change_time is None:
+            return "🟢"  # Stable table, no activity expected
+        
+        # If we've seen activity before but not recently
+        if baseline_activity > 0 and last_change_time:
+            time_since_last_change = current_time - last_change_time
+            if time_since_last_change > 600:  # 10 minutes without activity
+                return "🔴"  # Stale - had activity before, now inactive for long time
+            elif time_since_last_change > 180:  # 3 minutes without activity  
+                return "🟡"  # Slow - had activity before, now quiet
+        
+        return "🟢"  # Default to active/stable
+    
+    def _log_sample_result(self, table_key: str, seq_no_delta: int, docs_delta: int, 
+                          query_time_ms: int, health_status: str):
+        """Log the sample result in professional format"""
+        # Format deltas
+        seq_str = f"+{seq_no_delta}" if seq_no_delta > 0 else f"{seq_no_delta}" if seq_no_delta < 0 else "±0"
+        docs_str = f"+{docs_delta}" if docs_delta > 0 else f"{docs_delta}" if docs_delta < 0 else "±0"
+        
+        # Performance indicator
+        perf_indicator = "⚡" if query_time_ms > 1000 else ""
+        
+        # Log message
+        logger.info(f"{health_status} {table_key} // _seq_no {seq_str} // total_docs {docs_str} // {query_time_ms}ms {perf_indicator}")
+    
+    def _get_table_key(self, table_info: Dict) -> str:
+        """Generate a unique key for a table/partition"""
+        schema = table_info['schema_name']
+        table = table_info['table_name']
+        partition_values = table_info.get('partition_values')
+        
+        base = f"{schema}.{table}" if schema and schema != "doc" else table
+        
+        if partition_values:
+            try:
+                partition_dict = json.loads(partition_values)
+                partition_str = ",".join(f"{k}={v}" for k, v in partition_dict.items())
+                return f"{base}[{partition_str}]"
+            except (json.JSONDecodeError, TypeError):
+                pass
+        
+        return base
+    
+    def _get_shard_distribution(self, table_info: Dict) -> Dict:
+        """Get shard distribution for a specific table with targeted query"""
+        schema = table_info['schema_name']
+        table = table_info['table_name']
+        partition_ident = table_info.get('partition_ident')
+        
+        # Build targeted query for specific table/partition
+        query = """
+        SELECT 
+            sum(CASE WHEN primary = true THEN 1 ELSE 0 END) as primary_shards,
+            sum(CASE WHEN primary = false THEN 1 ELSE 0 END) as replica_shards,
+            avg(CASE WHEN primary = true THEN num_docs ELSE NULL END) as avg_docs_per_primary_shard
+        FROM sys.shards 
+        WHERE schema_name = ? 
+          AND table_name = ?
+        """
+        
+        params = [schema, table]
+        
+        # Add partition filter if needed
+        if partition_ident:
+            query += " AND partition_ident = ?"
+            params.append(partition_ident)
+        
+        try:
+            fresh_client = self._create_fresh_client()
+            result = fresh_client.execute_query(query, params)
+            
+            if result.get('rows'):
+                row = result['rows'][0]
+                primary_shards = row[0] or 0
+                replica_shards = row[1] or 0
+                avg_docs_per_shard = row[2] or 0
+                
+                return {
+                    'primary_shards': primary_shards,
+                    'replica_shards': replica_shards, 
+                    'avg_docs_per_primary_shard': int(avg_docs_per_shard)
+                }
+        except Exception as e:
+            # Fallback if shard query fails
+            pass
+        
+        return {
+            'primary_shards': 0,
+            'replica_shards': 0,
+            'avg_docs_per_primary_shard': 0
+        }
+    
+    def _create_fresh_client(self):
+        """Create a fresh database client connection"""
+        from ..database import CrateDBClient
+        return CrateDBClient(self.client.connection_string)
+    
+    def _update_table_stats(self, table_key: str, table_info: Dict, query_time_ms: int, table_stats: Dict):
+        """Update per-table statistics tracking"""
+        if table_key not in table_stats:
+            table_stats[table_key] = {
+                'doc_changes': [],
+                'performance': [],
+                'anomalies': 0,
+                'last_total_docs': table_info['total_docs']
+            }
+        
+        # Calculate document change since last measurement
+        current_docs = table_info['total_docs']
+        last_docs = table_stats[table_key].get('last_total_docs', current_docs)
+        doc_change = current_docs - last_docs
+        
+        # Track document changes and performance
+        if last_docs != current_docs:  # Only track when there's a change
+            table_stats[table_key]['doc_changes'].append(doc_change)
+        
+        table_stats[table_key]['performance'].append(query_time_ms)
+        table_stats[table_key]['last_total_docs'] = current_docs
+        
+        # Store shard info for analysis (only once) 
+        if 'shard_info' not in table_stats[table_key]:
+            # Get shard distribution for this specific table
+            shard_info = self._get_shard_distribution(table_info)
+            table_stats[table_key]['shard_info'] = {
+                'total_docs': table_info['total_docs'],
+                'size_gb': table_info['size_gb'],
+                'shard_distribution': shard_info
+            }
+        
+        # Keep last 50 measurements for rolling statistics
+        if len(table_stats[table_key]['doc_changes']) > 50:
+            table_stats[table_key]['doc_changes'] = table_stats[table_key]['doc_changes'][-50:]
+        if len(table_stats[table_key]['performance']) > 50:
+            table_stats[table_key]['performance'] = table_stats[table_key]['performance'][-50:]
+    
+    def _detect_anomaly(self, table_key: str, seq_no_delta: int, docs_delta: int, 
+                       prev_data: Dict, table_stats: Dict) -> bool:
+        """Detect anomalies in table behavior"""
+        if table_key not in table_stats:
+            return False
+        
+        # Simple anomaly detection based on baseline activity
+        baseline = prev_data.get('baseline_activity', 0)
+        
+        # Consider it an anomaly if activity is significantly different from baseline
+        # (more than 3x the baseline activity or sudden large negative change)
+        is_anomaly = False
+        if baseline > 0 and abs(seq_no_delta) > baseline * 3:
+            is_anomaly = True
+        elif docs_delta < -1000:  # Large negative document change
+            is_anomaly = True
+        
+        if is_anomaly:
+            table_stats[table_key]['anomalies'] += 1
+        
+        return is_anomaly
+    
+    def _print_read_check_stats(self, stats: Dict, table_stats: Dict, cluster_name: str):
+        """Print comprehensive statistics on exit"""
+        runtime = datetime.now() - stats['start_time']
+        runtime_str = str(runtime).split('.')[0]  # Remove microseconds
+        
+        self.console.print()
+        self.console.print(Panel.fit(
+            f"[bold blue]📊 Read Check Statistics [{cluster_name}][/bold blue]",
+            border_style="blue"
+        ))
+        
+        self.console.print(f"• Runtime: {runtime_str}")
+        self.console.print(f"• Samples taken: [green]{stats['samples_taken']}[/green]")
+        self.console.print(f"• Changes detected: [yellow]{stats['changes_detected']}[/yellow]")
+        self.console.print(f"• Connection failures: [red]{stats['connection_failures']}[/red]")
+        self.console.print(f"• Query failures: [red]{stats['query_failures']}[/red]")
+        
+        if stats['tables_queried']:
+            self.console.print(f"\n• Tables monitored ({len(stats['tables_queried'])}):")
+            for table in sorted(stats['tables_queried']):
+                self.console.print(f"  - {table}")
+        
+        # Enhanced per-table statistics
+        if table_stats:
+            self.console.print(f"\n• Per-table statistics:")
+            for table in sorted(table_stats.keys()):
+                if table in stats['tables_queried']:
+                    stats_data = table_stats[table]
+                    
+                    # Calculate document change statistics
+                    doc_changes = stats_data['doc_changes']
+                    if doc_changes:
+                        total_change = sum(doc_changes)
+                        avg_change = total_change / len(doc_changes)
+                        max_change = max(doc_changes)
+                        min_change = min(doc_changes)
+                        change_stats = f"Δ {total_change:+,} (min/avg/max: {min_change:+}/{avg_change:+.0f}/{max_change:+})"
+                    else:
+                        change_stats = "no changes detected"
+                    
+                    # Calculate min/avg/max for performance
+                    perf_values = stats_data['performance']
+                    if perf_values:
+                        perf_min = min(perf_values)
+                        perf_max = max(perf_values)
+                        perf_avg = sum(perf_values) / len(perf_values)
+                        perf_stats = f"{perf_min}/{perf_avg:.0f}/{perf_max}ms"
+                        
+                        # Calculate shard performance analysis
+                        shard_info = stats_data.get('shard_info', {})
+                        total_docs = shard_info.get('total_docs', 0)
+                        size_gb = shard_info.get('size_gb', 0)
+                        shard_dist = shard_info.get('shard_distribution', {})
+                        
+                        if total_docs > 0 and perf_avg > 0:
+                            docs_per_million = total_docs / 1_000_000
+                            ms_per_million_docs = perf_avg / docs_per_million if docs_per_million > 0 else 0
+                            
+                            # Build shard distribution info
+                            primary_shards = shard_dist.get('primary_shards', 0)
+                            replica_shards = shard_dist.get('replica_shards', 0)  
+                            avg_docs_per_shard = shard_dist.get('avg_docs_per_primary_shard', 0)
+                            
+                            shard_info_str = f"{primary_shards}P/{replica_shards}R shards"
+                            if avg_docs_per_shard > 0:
+                                shard_info_str += f", avg {avg_docs_per_shard/1_000_000:.1f}M docs/shard"
+                            
+                            shard_analysis = f" ({perf_avg:.0f}ms to scan {total_docs/1_000_000:.1f}M docs in {size_gb:.0f}GB = {ms_per_million_docs:.0f}ms per million docs, {shard_info_str})"
+                        else:
+                            shard_analysis = ""
+                    else:
+                        perf_stats = "N/A"
+                        shard_analysis = ""
+                    
+                    anomaly_count = stats_data['anomalies']
+                    anomaly_str = f" • {anomaly_count} anomalies" if anomaly_count > 0 else ""
+                    
+                    self.console.print(f"    [dim]{table}[/dim]")
+                    self.console.print(f"      docs: {change_stats} • perf: {perf_stats}{anomaly_str}")
+                    if shard_analysis:
+                        self.console.print(f"      [dim]max(_seq_no) analysis:{shard_analysis}[/dim]")
+        
+        self.console.print()
+
 
 def create_monitoring_commands(main_group):
     """Register monitoring commands with the main CLI group"""
@@ -960,4 +1506,45 @@ def create_monitoring_commands(main_group):
         client = ctx.obj['client']
         commands = MonitoringCommands(client)
         commands.large_translogs(ctx, translogsize, interval, watch, table, node, count)
+
+    @main_group.command()
+    @click.option('--seconds', default=30, help='Sampling interval in seconds (default: 30)')
+    @click.pass_context
+    def read_check(ctx, seconds):
+        """Monitor cluster data readability by sampling from largest tables
+        
+        This professional monitoring tool continuously checks cluster health by:
+        
+        • 🔍 Discovering the 5 largest tables/partitions automatically
+        • ⚡ Optimized max(_seq_no) queries every --seconds to detect write activity
+        • 📊 Write activity scoring: Active/Slow/Stale based on _seq_no changes
+        • 🎯 Query performance tracking with response time monitoring
+        • 🔄 Fresh connections for each check (isolated testing)
+        • 🛡️ Exponential backoff retry with comprehensive error handling
+        • 📈 Baseline anomaly detection after establishing patterns
+        • 🎯 Partition-aware querying with proper SQL generation
+        
+        HEALTH INDICATORS:
+        • Write Activity: 🟢 Active (changing), 🟡 Slow (quiet), 🔴 Stale (inactive)
+        • Query Performance: ⚡ Slow queries (>1000ms), ⚠️ Anomaly detection
+        • Optimized queries using max() aggregation (no sorting/LIMIT)
+        • Tracks both _seq_no and total_docs changes over time
+        • Re-discovers largest tables every 10 minutes
+        • Graceful degradation if individual tables fail
+        • Professional statistics on CTRL+C
+        
+        LOGGING FORMAT:
+        timestamp: schema.table // _seq_no ±0 // total_docs ±0 // 45ms [⚡ if slow]
+        
+        EXAMPLES:
+            xmover read-check                           # Default: 30s interval
+            xmover read-check --seconds 60              # Custom interval
+            xmover read-check --seconds 10              # High-frequency monitoring
+        
+        This is the first XMover command to use loguru for professional logging.
+        Perfect for detecting cluster availability issues and write activity patterns.
+        """
+        client = ctx.obj['client']
+        commands = MonitoringCommands(client)
+        commands.read_check(ctx, seconds)
                 

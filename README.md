@@ -8,6 +8,7 @@ A comprehensive Python tool for analyzing CrateDB shard distribution across node
 - **Shard Distribution Analysis**: Detect and rank distribution anomalies across largest tables
 - **Shard Movement Recommendations**: Intelligent suggestions for rebalancing with safety validation
 - **Recovery Monitoring**: Track ongoing shard recovery operations with progress details
+- **Cluster Health Monitoring**: Monitor data readability by sampling from largest tables
 - **Zone Conflict Detection**: Prevents moves that would violate CrateDB's zone awareness
 - **Node Decommissioning**: Plan safe node removal with automated shard relocation
 - **Dry Run Mode**: Test recommendations without generating actual SQL commands
@@ -18,12 +19,14 @@ A comprehensive Python tool for analyzing CrateDB shard distribution across node
 **Note: This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed.**
 
 1. Clone the repository:
+
 ```bash
 git clone <repository-url>
 cd xmover
 ```
 
 2. Install using uv (recommended) or pip:
+
 ```bash
 # Using uv
 uv sync
@@ -35,6 +38,7 @@ pip install -e .
 3. Create a `.env` file with your CrateDB connection details:
 
 **For localhost CrateDB:**
+
 ```bash
 CRATE_CONNECTION_STRING=https://localhost:4200
 CRATE_USERNAME=crate
@@ -43,6 +47,7 @@ CRATE_SSL_VERIFY=false
 ```
 
 **For remote CrateDB:**
+
 ```bash
 CRATE_CONNECTION_STRING=https://your-cluster.cratedb.net:4200
 CRATE_USERNAME=your-username
@@ -53,17 +58,21 @@ CRATE_SSL_VERIFY=true
 ## Quick Start
 
 ### Test Connection
+
 You can test your connection configuration with the included test script:
+
 ```bash
 python test_connection.py
 ```
 
 Or use the built-in test:
+
 ```bash
 xmover test-connection
 ```
 
 ### Analyze Cluster
+
 ```bash
 # Complete cluster analysis
 xmover analyze
@@ -73,6 +82,7 @@ xmover analyze --table my_table
 ```
 
 ### Find Movement Candidates
+
 ```bash
 # Find shards that can be moved (40-60GB by default)
 xmover find-candidates
@@ -82,6 +92,7 @@ xmover find-candidates --min-size 20 --max-size 100
 ```
 
 ### Generate Recommendations
+
 ```bash
 # Dry run (default) - shows what would be recommended
 xmover recommend
@@ -94,6 +105,7 @@ xmover recommend --prioritize-space
 ```
 
 ### Shard Distribution Analysis
+
 ```bash
 # Analyze distribution anomalies for top 10 largest tables
 xmover shard-distribution
@@ -106,6 +118,7 @@ xmover shard-distribution --table my_table
 ```
 
 ### Zone Analysis
+
 ```bash
 # Check zone balance
 xmover check-balance
@@ -115,6 +128,7 @@ xmover zone-analysis --show-shards
 ```
 
 ### Advanced Troubleshooting
+
 ```bash
 # Validate specific moves before execution
 xmover validate-move SCHEMA.TABLE SHARD_ID FROM_NODE TO_NODE
@@ -126,15 +140,18 @@ xmover explain-error "your error message here"
 ## Commands Reference
 
 ### `analyze`
+
 Analyzes current shard distribution across nodes and zones.
 
 **Options:**
+
 - `--table, -t`: Analyze specific table only
 - `--largest INTEGER`: Show N largest tables/partitions by size
 - `--smallest INTEGER`: Show N smallest tables/partitions by size
 - `--no-zero-size`: Exclude zero-sized tables from smallest results (default: include zeros)
 
 **Examples:**
+
 ```bash
 # Basic cluster analysis
 xmover analyze
@@ -156,6 +173,7 @@ xmover analyze --table events --largest 3
 ```
 
 **Sample Output (--largest 3):**
+
 ```
                         Largest Tables/Partitions by Size (Top 3)
 ╭─────────────────────────────────┬─────────────────────────────┬────────┬───────┬──────────┬──────────┬──────────┬────────────╮
@@ -170,6 +188,7 @@ xmover analyze --table events --largest 3
 ```
 
 **Sample Output (--smallest 5 --no-zero-size):**
+
 ```
 ℹ️  Found 12 table/partition(s) with 0.0GB size (excluded from results)
 
@@ -188,15 +207,18 @@ xmover analyze --table events --largest 3
 ```
 
 ### `find-candidates`
+
 Finds shards suitable for movement based on size and health criteria.
 
 **Options:**
+
 - `--table, -t`: Find candidates in specific table only
 - `--min-size`: Minimum shard size in GB (default: 40)
 - `--max-size`: Maximum shard size in GB (default: 60)
 - `--node`: Only show candidates from this specific source node (e.g., data-hot-4)
 
 **Examples:**
+
 ```bash
 # Find candidates in size range for specific table
 xmover find-candidates --min-size 20 --max-size 50 --table logs
@@ -206,9 +228,11 @@ xmover find-candidates --min-size 30 --max-size 60 --node data-hot-4
 ```
 
 ### `recommend`
+
 Generates intelligent shard movement recommendations for cluster rebalancing.
 
 **Options:**
+
 - `--table, -t`: Generate recommendations for specific table only
 - `--min-size`: Minimum shard size in GB (default: 40)
 - `--max-size`: Maximum shard size in GB (default: 60)
@@ -222,6 +246,7 @@ Generates intelligent shard movement recommendations for cluster rebalancing.
 - `--node`: Only recommend moves from this specific source node (e.g., data-hot-4)
 
 **Examples:**
+
 ```bash
 # Dry run with zone balancing priority
 xmover recommend --prioritize-zones
@@ -270,47 +295,55 @@ xmover recommend --max-disk-usage 80  # Used as-is (within safe limits)
 ```
 
 **Benefits:**
+
 - **Cluster-Aware**: Respects your specific watermark configuration
-- **Safety Buffer**: Maintains 2% buffer below low watermark  
+- **Safety Buffer**: Maintains 2% buffer below low watermark
 - **User Override**: Honors lower user-specified values
 - **Automatic Adjustment**: Shows clear warnings when adjusting thresholds
 
 ### `zone-analysis`
+
 Provides detailed analysis of zone distribution and potential conflicts.
 
 **Options:**
+
 - `--table, -t`: Analyze zones for specific table only
 - `--show-shards/--no-show-shards`: Show individual shard details (default: False)
 
 **Example:**
+
 ```bash
 xmover zone-analysis --show-shards --table critical_data
 ```
 
 ### `check-balance`
+
 Checks zone balance for shards with configurable tolerance.
 
 **Options:**
+
 - `--table, -t`: Check balance for specific table only
 - `--tolerance`: Zone balance tolerance percentage (default: 10)
 
 **Example:**
+
 ```bash
 xmover check-balance --tolerance 15
 ```
 
-
-
 ### `validate-move`
+
 Validates a specific shard move before execution to prevent errors.
 
 **Arguments:**
+
 - `SCHEMA_TABLE`: Schema and table name (format: schema.table)
 - `SHARD_ID`: Shard ID to move
 - `FROM_NODE`: Source node name
 - `TO_NODE`: Target node name
 
 **Examples:**
+
 ```bash
 # Standard validation
 xmover validate-move CUROV.maddoxxxS 4 data-hot-1 data-hot-3
@@ -320,12 +353,15 @@ xmover validate-move CUROV.tendedero 4 data-hot-1 data-hot-3 --max-disk-usage 90
 ```
 
 ### `explain-error`
+
 Explains CrateDB allocation error messages and provides troubleshooting guidance.
 
 **Arguments:**
+
 - `ERROR_MESSAGE`: The CrateDB error message to analyze (optional - can be provided interactively)
 
 **Examples:**
+
 ```bash
 # Interactive mode
 xmover explain-error
@@ -335,9 +371,11 @@ xmover explain-error "NO(a copy of this shard is already allocated to this node)
 ```
 
 ### `monitor-recovery`
+
 Monitors active shard recovery operations on the cluster.
 
 **Options:**
+
 - `--table, -t`: Monitor recovery for specific table only
 - `--node, -n`: Monitor recovery on specific node only
 - `--watch, -w`: Continuously monitor (refresh every 10s)
@@ -346,6 +384,7 @@ Monitors active shard recovery operations on the cluster.
 - `--include-transitioning`: Include recently completed recoveries (DONE stage)
 
 **Examples:**
+
 ```bash
 # Check current recovery status
 xmover monitor-recovery
@@ -364,39 +403,46 @@ xmover monitor-recovery --watch --include-transitioning
 ```
 
 **Recovery Types:**
+
 - **PEER**: Copying shard data from another node (replication/relocation)
 - **DISK**: Rebuilding shard from local data (after restart/disk issues)
 
 **Enhanced Translog Monitoring:**
 The recovery monitor now displays detailed translog information in the format:
+
 ```
 📋 TURVO.shipmentFormFieldData_events S4 PEER TRANSLOG 0.0% 6.2GB (TL:109.8GB / 22.1GB / 20%) data-hot-0 → data-hot-7
 ```
 
 **Translog Display Format**: `TL:X.XGB / Y.YGB / ZZ%`
+
 - `X.XGB`: Total translog file size (`translog_stats['size']`)
 - `Y.YGB`: Uncommitted translog size (`translog_stats['uncommitted_size']`)
 - `ZZ%`: Uncommitted as percentage of total translog size
 
 **Color Coding:**
+
 - 🔴 **Red**: Uncommitted ≥ 5GB OR uncommitted ≥ 80% (critical)
-- 🟡 **Yellow**: Uncommitted ≥ 1GB OR uncommitted ≥ 50% (warning) 
+- 🟡 **Yellow**: Uncommitted ≥ 1GB OR uncommitted ≥ 50% (warning)
 - 🟢 **Green**: Below warning thresholds (normal)
 
 Translog information is only shown when significant (uncommitted ≥ 10MB or total ≥ 50MB).
 
 **Enhanced Replica Progress Tracking:**
 For replica shard recoveries, the monitor now shows sequence number-based progress when available:
+
 ```
 📋 TURVO.LINEAGE_DIRECTLY_OPEN_TO_APPOINTMENT S2R PEER TRANSLOG 99.9% (seq) 15.2GB data-hot-0 → data-hot-1
 ```
 
 **Progress Display Formats:**
+
 - `99.9% (seq)`: Replica progress based on sequence number comparison with primary
 - `37.5% (seq) / 95.0% (rec)`: Shows both when sequence and traditional progress differ significantly (>5%)
 - `98.5%`: Primary shards or when sequence data unavailable (traditional progress)
 
 **Sequence Progress Benefits:**
+
 - More accurate progress indication for replica synchronization
 - Based on comparing `max_seq_no` between replica and primary shards
 - Reveals actual replication lag in terms of operations behind primary
@@ -404,6 +450,7 @@ For replica shard recoveries, the monitor now shows sequence number-based progre
 
 **Enhanced Transitioning Recovery Display:**
 The monitor now shows detailed information for transitioning recoveries instead of just "(transitioning)":
+
 ```
 16:08:20 | 5 done (transitioning)
          | 🔄 TURVO.accountFormFieldData S7R PEER DONE 99.8% (seq) 3.8GB data-hot-5 → data-hot-7
@@ -412,6 +459,7 @@ The monitor now shows detailed information for transitioning recoveries instead 
 ```
 
 **Transitioning Display Features:**
+
 - Shows up to 5 transitioning recoveries with full details
 - Includes sequence progress, translog info, and node routing
 - Throttled to every 30 seconds to reduce noise
@@ -419,9 +467,11 @@ The monitor now shows detailed information for transitioning recoveries instead 
 - Distinguishes primary (P) vs replica (R) shards
 
 ### `problematic-translogs`
+
 Find tables with problematic translog sizes and generate replica management commands.
 
 **Options:**
+
 - `--sizeMB INTEGER`: Minimum translog uncommitted size in MB (default: 300)
 - `--execute`: Execute the replica management commands after confirmation
 
@@ -429,6 +479,7 @@ Find tables with problematic translog sizes and generate replica management comm
 This command identifies tables with replica shards that have large uncommitted translog sizes indicating replication issues. It shows both individual problematic shards and a summary by table/partition. It generates two types of ALTER commands: individual REROUTE CANCEL SHARD commands for each problematic shard, and replica management commands that temporarily set replicas to 0 and restore them to force recreation of problematic replicas.
 
 **Examples:**
+
 ```bash
 # Show problematic tables with translog > 300MB (default)
 xmover problematic-translogs
@@ -441,6 +492,7 @@ xmover problematic-translogs --sizeMB 1000 --execute
 ```
 
 **Sample Output:**
+
 ```
                    Problematic Replica Shards (translog > 300MB)
 ╭────────┬───────────────────────────────┬────────────────────────────┬──────────┬────────────┬─────────────╮
@@ -453,7 +505,7 @@ xmover problematic-translogs --sizeMB 1000 --execute
 
 Found 2 table/partition(s) with problematic translogs:
 
-              Tables with Problematic Replicas (translog > 300MB)               
+              Tables with Problematic Replicas (translog > 300MB)
 ╭────────┬───────────┬───────────┬───────────┬──────────┬─────────────┬──────────────┬──────────╮
 │ Schema │ Table     │ Partition │ Problema… │ Max      │ Shards      │ Size GB      │ Current  │
 │        │           │           │ Replicas  │ Trans.MB │ (P/R)       │ (P/R)        │ Replicas │
@@ -484,20 +536,23 @@ Total: 3 REROUTE CANCEL commands + 4 replica management commands
 When using `--execute`, each command is presented individually for confirmation, allowing you to selectively execute specific commands as needed.
 
 ### `active-shards`
+
 Monitors the most active shards by tracking checkpoint progression over time.
 
 **Options:**
+
 - `--count`: Number of most active shards to show (default: 10)
 - `--interval`: Observation interval in seconds (default: 30)
 - `--min-checkpoint-delta`: Minimum checkpoint progression between snapshots to show shard (default: 1000)
 - `--table, -t`: Monitor specific table only
 - `--node, -n`: Monitor specific node only
 - `--watch, -w`: Continuously monitor (refresh every interval)
-- `--exclude-system`: Exclude system tables (gc.*, information_schema.*, *_events, *_log)
+- `--exclude-system`: Exclude system tables (gc._, information_schema._, _\_events, _\_log)
 - `--min-rate`: Minimum activity rate (changes/sec) to show
 - `--show-replicas/--hide-replicas`: Show replica shards (default: True)
 
 **Examples:**
+
 ```bash
 # Show top 10 most active shards over 30 seconds
 xmover active-shards
@@ -527,6 +582,7 @@ xmover active-shards --hide-replicas --count 20
 This command helps identify which shards are receiving the most write activity by measuring local checkpoint progression between two snapshots.
 
 **How it works:**
+
 1. **Takes snapshot of ALL started shards** (not just currently active ones)
 2. **Waits for observation interval** (configurable, default: 30 seconds)
 3. **Takes second snapshot** of all started shards
@@ -534,6 +590,7 @@ This command helps identify which shards are receiving the most write activity b
 5. **Shows ranked results** with activity trends and insights
 
 **Enhanced output features:**
+
 - **Checkpoint visibility**: Shows actual `local_checkpoint` values (CP Start → CP End → Delta)
 - **Partition awareness**: Separate tracking for partitioned tables (different partition_ident values)
 - **Activity trends**: 🔥 HOT (≥100/s), 📈 HIGH (≥50/s), 📊 MED (≥10/s), 📉 LOW (<10/s)
@@ -545,6 +602,7 @@ This command helps identify which shards are receiving the most write activity b
 This approach captures shards that become active during the observation period, providing a complete view of cluster write patterns and identifying hot spots. The enhanced filtering helps focus on business-critical activity patterns.
 
 **Sample output (single run):**
+
 ```
 🔥 Most Active Shards (3 shown, 30s observation period)
 
@@ -566,6 +624,7 @@ Insights:
 ```
 
 **Sample output (watch mode - cleaner):**
+
 ```
 30s interval | threshold: 1,000 | top 5
 
@@ -583,9 +642,11 @@ Total checkpoint activity: 190,314 changes, Average rate: 2,109.0/sec
 ```
 
 ### `large-translogs`
+
 Monitors shards with large translog uncommitted sizes that do not flush properly, displaying both primary and replica shards.
 
 **Options:**
+
 - `--translogsize`: Minimum translog uncommitted size threshold in MB (default: 500)
 - `--interval`: Monitoring interval in seconds for watch mode (default: 60)
 - `--watch, -w`: Continuously monitor (refresh every interval)
@@ -594,6 +655,7 @@ Monitors shards with large translog uncommitted sizes that do not flush properly
 - `--count`: Maximum number of shards with large translogs to show (default: 50)
 
 **Examples:**
+
 ```bash
 # Show shards with translog over default 500MB threshold
 xmover large-translogs
@@ -613,7 +675,37 @@ xmover large-translogs --node data-hot-1 --count 20
 
 This command helps identify shards that are not flushing properly by monitoring their translog uncommitted sizes, which can indicate replication or flush issues.
 
+### `read-check`
+
+Monitors cluster data readability by continuously sampling records from the largest tables/partitions.
+
+**Options:**
+
+- `--seconds`: Sampling interval in seconds (default: 30)
+
+**Examples:**
+
+```bash
+# Default monitoring (30s interval)
+xmover read-check
+
+# High-frequency monitoring
+xmover read-check --seconds 10
+
+# Custom interval
+xmover read-check --seconds 60
+```
+
+**Features:**
+
+- 🟢 Active tables (seq_no changing), 🟡 Slow tables, 🔴 Stale tables
+- Performance tracking with query response times
+- Automatic discovery of 5 largest tables every 10 minutes
+- Fresh connections and retry logic for reliability
+- Professional statistics on exit (CTRL+C)
+
 **Output includes:**
+
 - **Schema.Table**: Combined schema and table name
 - **Partition**: Partition values or "-" for non-partitioned tables
 - **Shard**: Numeric shard identifier
@@ -624,6 +716,7 @@ This command helps identify shards that are not flushing properly by monitoring 
 - **Summary**: Total shards, primary/replica breakdown, average translog size
 
 **Sample output:**
+
 ```
 Large Translogs (>400MB) - 09:45:51
 ╭────────────────────────────┬──────────────────────┬───────┬────────────┬────────┬──────╮
@@ -637,6 +730,7 @@ Large Translogs (>400MB) - 09:45:51
 ```
 
 ### `test-connection`
+
 Tests the connection to CrateDB and displays basic cluster information.
 
 ## Operation Modes
@@ -667,21 +761,25 @@ When generating recommendations, you can choose between two prioritization strat
 ### Regular Cluster Maintenance
 
 1. Analyze current state:
+
 ```bash
 xmover analyze
 ```
 
 2. Check for zone imbalances:
+
 ```bash
 xmover check-balance
 ```
 
 3. Generate and review recommendations:
+
 ```bash
 xmover recommend --dry-run
 ```
 
 4. Execute safe moves:
+
 ```bash
 xmover recommend --execute
 ```
@@ -691,16 +789,19 @@ xmover recommend --execute
 When a specific node is running low on space:
 
 1. Check which node needs relief:
+
 ```bash
 xmover analyze
 ```
 
 2. Generate recommendations for that specific node:
+
 ```bash
 xmover recommend --prioritize-space --node data-hot-4 --dry-run
 ```
 
 3. Execute the moves:
+
 ```bash
 xmover recommend --prioritize-space --node data-hot-4 --execute
 ```
@@ -710,6 +811,7 @@ xmover recommend --prioritize-space --node data-hot-4 --execute
 After executing shard moves, monitor the recovery progress:
 
 1. Execute moves and monitor recovery:
+
 ```bash
 # Execute moves
 xmover recommend --node data-hot-1 --execute
@@ -719,6 +821,7 @@ xmover monitor-recovery --watch
 ```
 
 2. Monitor specific table or node recovery:
+
 ```bash
 # Monitor specific table
 xmover monitor-recovery --table shipmentFormFieldData --watch
@@ -731,6 +834,7 @@ xmover monitor-recovery --watch --include-transitioning
 ```
 
 3. Check recovery after node maintenance:
+
 ```bash
 # After bringing a node back online
 xmover monitor-recovery --node data-hot-3 --recovery-type DISK
@@ -741,6 +845,7 @@ xmover monitor-recovery --node data-hot-3 --recovery-type DISK
 Identify which shards are receiving the most write activity:
 
 1. Quick snapshot of most active shards:
+
 ```bash
 # Show top 10 most active shards over 30 seconds
 xmover active-shards
@@ -750,6 +855,7 @@ xmover active-shards --count 15 --interval 60
 ```
 
 2. Continuous monitoring for real-time insights:
+
 ```bash
 # Continuous monitoring with 30-second intervals
 xmover active-shards --watch --interval 30
@@ -759,6 +865,7 @@ xmover active-shards --table critical_table --watch
 ```
 
 3. Integration with rebalancing workflow:
+
 ```bash
 # Identify hot shards first
 xmover active-shards --count 20 --interval 60
@@ -773,11 +880,13 @@ xmover active-shards --table hot_table --watch
 ### Manual Shard Movement
 
 1. Validate the move first:
+
 ```bash
 xmover validate-move SCHEMA.TABLE SHARD_ID FROM_NODE TO_NODE
 ```
 
 2. Generate safe recommendations:
+
 ```bash
 xmover recommend --prioritize-space --execute
 ```
@@ -787,11 +896,13 @@ xmover recommend --prioritize-space --execute
 ### Troubleshooting Zone Conflicts
 
 1. Identify conflicts:
+
 ```bash
 xmover zone-analysis --show-shards
 ```
 
 2. Generate targeted fixes:
+
 ```bash
 xmover recommend --prioritize-zones --execute
 ```
@@ -805,7 +916,7 @@ xmover recommend --prioritize-zones --execute
 - `CRATE_PASSWORD`: Password for authentication (optional, only used if username is also provided)
 - `CRATE_SSL_VERIFY`: SSL certificate verification (default: auto-detects based on connection string)
   - `true`: Always verify SSL certificates
-  - `false`: Disable SSL certificate verification  
+  - `false`: Disable SSL certificate verification
   - `auto`: Automatically disable for localhost/127.0.0.1, enable for remote connections
 
 #### Retry and Timeout Configuration
@@ -858,33 +969,41 @@ xmover analyze
 ### Common Issues and Solutions
 
 1. **Zone Conflicts**
+
    ```
    Error: "NO(a copy of this shard is already allocated to this node)"
    ```
+
    - **Cause**: Target node already has a copy of the shard
    - **Solution**: Use `xmover zone-analysis --show-shards` to find alternative targets
    - **Prevention**: Always use `xmover validate-move` before executing moves
 
 2. **Zone Allocation Limits**
+
    ```
    Error: "too many copies of the shard allocated to nodes with attribute [zone]"
    ```
+
    - **Cause**: CrateDB's zone awareness prevents too many copies in same zone
    - **Solution**: Move shard to a different availability zone
    - **Prevention**: Use `xmover recommend` which respects zone constraints
 
 3. **Insufficient Space**
+
    ```
    Error: "not enough disk space"
    ```
+
    - **Cause**: Target node lacks sufficient free space
    - **Solution**: Choose node with more capacity or free up space
    - **Check**: `xmover analyze` to see available space per node
 
 4. **High Disk Usage Blocking Moves**
+
    ```
    Error: "Target node disk usage too high (85.3%)"
    ```
+
    - **Cause**: Target node exceeds default 85% disk usage threshold
    - **Solution**: Use `--max-disk-usage` to allow higher usage for urgent moves
    - **Example**: `xmover recommend --max-disk-usage 90 --prioritize-space`
@@ -911,6 +1030,7 @@ xmover explain-error "NO(a copy of this shard is already allocated to this node)
 XMover uses configurable safety thresholds to prevent risky moves:
 
 **Disk Usage Threshold (default: 85%)**
+
 ```bash
 # Allow moves to nodes with higher disk usage
 xmover recommend --max-disk-usage 90 --prioritize-space
@@ -920,6 +1040,7 @@ xmover validate-move SCHEMA.TABLE SHARD_ID FROM TO --max-disk-usage 95
 ```
 
 **When to Adjust Thresholds:**
+
 - **Emergency situations**: Increase to 90-95% for critical space relief
 - **Conservative operations**: Decrease to 75-80% for safer moves
 - **Staging environments**: Can be more aggressive (90%+)
@@ -928,6 +1049,7 @@ xmover validate-move SCHEMA.TABLE SHARD_ID FROM TO --max-disk-usage 95
 ### Advanced Troubleshooting
 
 For detailed troubleshooting procedures, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md) which covers:
+
 - Step-by-step diagnostic procedures
 - Emergency recovery procedures
 - Best practices for safe operations
