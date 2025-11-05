@@ -7,6 +7,7 @@ A comprehensive Python tool for analyzing CrateDB shard distribution across node
 - **Cluster Analysis**: Complete overview of shard distribution across nodes and zones
 - **Shard Distribution Analysis**: Detect and rank distribution anomalies across largest tables
 - **Shard Movement Recommendations**: Intelligent suggestions for rebalancing with safety validation
+- **AutoExec Replica Reset**: Automated replica reset operations for problematic translog shards with dry-run safety
 - **Recovery Monitoring**: Track ongoing shard recovery operations with progress details
 - **Cluster Health Monitoring**: Monitor data readability by sampling from largest tables
 - **Zone Conflict Detection**: Prevents moves that would violate CrateDB's zone awareness
@@ -474,6 +475,11 @@ Find tables with problematic translog sizes and generate replica management comm
 
 - `--sizeMB INTEGER`: Minimum translog uncommitted size in MB (default: 512)
 - `--execute`: Execute the replica management commands after confirmation
+- `--autoexec`: Automatically execute replica reset operations (sets replicas to 0, waits for leases to clear, restores replicas)
+- `--dry-run`: Simulate autoexec operations without making database changes (requires `--autoexec`)
+- `--percentage INTEGER`: Only process tables exceeding this percentage of threshold (default: 200%)
+- `--max-wait INTEGER`: Maximum seconds to wait for retention leases (default: 720)
+- `--log-format {console,json}`: Logging format for container environments
 
 **Description:**
 This command uses adaptive thresholds based on table-specific `flush_threshold_size` settings to intelligently identify problematic translog sizes. It queries table settings only for initially problematic tables (performance optimization) and applies table-specific thresholds (110% of configured flush_threshold_size). For partitioned tables, it properly handles partition-specific settings and includes partition information in REROUTE CANCEL commands. It shows both individual problematic shards and a summary by table/partition.
@@ -489,6 +495,15 @@ xmover problematic-translogs --sizeMB 500
 
 # Execute replica management commands using adaptive thresholds (1GB baseline)
 xmover problematic-translogs --sizeMB 1000 --execute
+
+# AutoExec: Preview what would be executed (safe simulation)
+xmover problematic-translogs --autoexec --dry-run
+
+# AutoExec: Automatically execute replica reset operations
+xmover problematic-translogs --autoexec
+
+# AutoExec: Process only tables exceeding 300% of threshold with JSON logging
+xmover problematic-translogs --autoexec --percentage 300 --log-format json
 ```
 
 **Sample Output:**
@@ -538,6 +553,8 @@ Total: 3 REROUTE CANCEL commands + 4 replica management commands
 ```
 
 When using `--execute`, each command is presented individually for confirmation, allowing you to selectively execute specific commands as needed.
+
+**AutoExec Mode:** The `--autoexec` flag provides automated replica reset operations with robust error handling and retry logic. Use `--dry-run` first to safely preview operations. Designed for Kubernetes CronJob automation with structured JSON logging support.
 
 ### `active-shards`
 

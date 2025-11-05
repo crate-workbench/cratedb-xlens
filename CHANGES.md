@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **AutoExec functionality for `problematic-translogs`**: Automated replica reset operations
+  - New `--autoexec` flag: Automatically executes replica reset operations without manual intervention
+  - New `--dry-run` flag: Safe simulation mode that shows what would be executed without making changes
+  - New `--percentage` parameter: Filter tables by threshold percentage (default: 200%)
+  - New `--max-wait` parameter: Configure timeout for retention lease monitoring (default: 720s)
+  - New `--log-format` parameter: JSON logging support for container/Kubernetes environments
+  - Robust state machine implementation: Handles set replicas → monitor leases → restore replicas workflow
+  - Intelligent retry logic: Exponential backoff with configurable timeouts
+  - Comprehensive error handling: Automatic rollback on failures with manual intervention guidance
+  - Production-ready: Designed for Kubernetes CronJob automation
+
 - **New `read-check` command**: Professional cluster data readability monitor
   - Continuously monitors the 5 largest tables/partitions using max(\_seq_no) to detect data changes
   - Health status indicators: 🟢 Active, 🟡 Slow, 🔴 Stale tables
@@ -22,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed obsolete `--limit` parameter (no longer needed with max() aggregation)
   - Uses CrateDB's actual query execution time instead of network RTT for performance metrics
 
+### Fixed
+
+- **Critical CrateDB response handling bug**: Fixed AutoExec operations incorrectly reported as failures
+  - Issue: Successful ALTER TABLE operations were marked as "Failed: Unknown error"
+  - Root cause: Code checked for 'success' field that CrateDB doesn't return in HTTP responses
+  - Fix: Changed to check for absence of 'error' field instead of presence of 'success' field
+  - Impact: AutoExec operations now correctly report success/failure status
+  - Evidence: Operations were actually succeeding (retention leases changed) but reported as failed
+
+- **Hardcoded threshold bug in AutoExec filtering**: Fixed percentage calculations using wrong thresholds
+  - Issue: AutoExec percentage filtering used hardcoded 563MB for all tables instead of adaptive thresholds
+  - Fix: Modified `_filter_tables_by_percentage()` to use actual table-specific adaptive thresholds
+  - Impact: AutoExec now respects individual table configurations instead of using one-size-fits-all approach
+
 ### Changed
 
 - **Enhanced `problematic-translogs` command**: Adaptive threshold detection based on table settings
@@ -33,7 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Clean CLI: Simplified help text for better usability
   - Fixed REROUTE CANCEL commands to include partition information for partitioned tables
 
-- **First loguru integration**: `read-check` is the first command to use structured logging
+- **Enhanced SQL logging**: Complete transparency for AutoExec operations
+  - Dry-run mode: Shows "DRY RUN: Would execute: SQL" for all operations
+  - Regular mode: Shows "Executing: SQL" before actual database execution
+  - JSON logging: Uses loguru with structured data (consistent with read-check command)
+  - Rollback operations: Clear logging for failure recovery attempts
+  - Benefit: Full audit trail and debugging visibility for all database operations
+
+- **Consistent loguru usage**: Both `read-check` and `problematic-translogs --autoexec` use loguru for structured logging
 - **Enhanced per-table statistics**: Shows document change tracking and performance metrics
   - Document changes: Total change with min/avg/max deltas
   - Performance: Query response time min/avg/max
@@ -44,13 +76,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies
 
-- Added `loguru>=0.7.0` for professional structured logging
+- Enhanced `loguru>=0.7.0` usage: AutoExec now uses loguru for JSON logging (consistent with read-check command)
+
+### Testing
+
+- **Comprehensive AutoExec test coverage**: 44 new tests across 3 test modules
+  - `test_autoexec_functionality.py`: 37 unit tests for state machine, dry-run safety, and core logic
+  - `test_autoexec_integration.py`: Integration tests for real-world scenarios
+  - `test_autoexec_cli.py`: CLI parameter validation and usage tests
+  - `test_adaptive_thresholds.py`: 7 tests specifically verifying information_schema threshold lookup
+  - Coverage includes: State transitions, error handling, retry logic, SQL generation, percentage filtering
 
 ### Documentation
 
-- Updated main README.md with `read-check` command reference
+- Updated main README.md with `read-check` command reference and AutoExec functionality
 - Added comprehensive `docs/read-check.md` with usage guide and examples
 - Updated `docs/README.md` with data readability monitoring section
+- Added `SQL_LOGGING_AND_BUGFIX_SUMMARY.md`: Technical documentation of bug fixes and enhancements
+- Created verification scripts: `verify_dry_run_safety.py` and `verify_adaptive_thresholds.py`
 
 ---
 

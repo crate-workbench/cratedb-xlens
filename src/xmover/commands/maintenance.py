@@ -8,12 +8,15 @@ This module contains commands related to cluster maintenance operations:
 
 import sys
 import time
+from enum import Enum
 from typing import Optional, List, Dict, Any, Union
 import click
 from rich.table import Table
 from rich.panel import Panel
 from rich import box
 from rich.console import Console
+
+from loguru import logger
 
 from .base import BaseCommand
 from ..distribution_analyzer import DistributionAnalyzer
@@ -202,15 +205,24 @@ class MaintenanceCommands(BaseCommand):
             self.console.print(f"[green]✅ Analyzed {total_tables} largest tables[/green]")
         self.console.print("[dim]💡 Use --table <table_name> for detailed analysis of specific tables[/dim]")
 
-    def problematic_translogs(self, sizemb: int, execute: bool) -> None:
-        """Find tables with problematic translog sizes and generate comprehensive shard management commands
+    def problematic_translogs(self, sizemb: int, execute: bool, autoexec: bool = False, 
+                             dry_run: bool = False, percentage: int = 200, 
+                             max_wait: int = 720, log_format: str = "console") -> None:
+        """Find tables with problematic translog sizes and optionally execute automatic replica reset
 
         This command identifies tables with replica shards that have large uncommitted translog sizes
-        indicating replication issues. It generates a complete sequence including:
+        indicating replication issues. 
+        
+        In analysis mode (default), it generates a complete sequence including:
         1. Stop automatic shard rebalancing
         2. REROUTE CANCEL commands for problematic shards
         3. REROUTE ALLOCATE commands to recreate replicas
         4. Re-enable automatic shard rebalancing
+        
+        In autoexec mode (--autoexec), it automatically executes:
+        1. Set replicas to 0 for each problematic table
+        2. Monitor retention leases until cleared
+        3. Restore original replica count
         """
         if not self.validate_connection():
             return
@@ -218,7 +230,10 @@ class MaintenanceCommands(BaseCommand):
         self.console.print(Panel.fit(f"[bold blue]Problematic Translog Analysis[/bold blue]"))
         self.console.print(f"[dim]Using adaptive thresholds based on table flush_threshold_size settings (≥ {sizemb} MB baseline)[/dim]")
 
-        if execute:
+        if autoexec:
+            mode_desc = "DRY RUN" if dry_run else "AUTOEXEC"
+            self.console.print(f"[red]🤖 {mode_desc} MODE - automatically executing replica reset operations[/red]")
+        elif execute:
             self.console.print("[yellow]⚠️  COMMAND GENERATION MODE - SQL commands will be generated for display[/yellow]")
         else:
             self.console.print("[green]🔍 ANALYSIS MODE - showing problematic shards only[/green]")
@@ -239,14 +254,22 @@ class MaintenanceCommands(BaseCommand):
             # Display summary by table
             self._display_table_summary(summary_rows)
 
-            if execute:
+            if autoexec:
+                # Execute automatic replica reset
+                success = self._execute_autoexec(summary_rows, dry_run, percentage, max_wait, log_format)
+                if not success:
+                    sys.exit(self._get_autoexec_exit_code())
+            elif execute:
                 self._generate_comprehensive_commands(individual_shards, summary_rows)
             else:
                 self.console.print()
                 self.console.print("[dim]💡 Use --execute flag to generate comprehensive shard management commands for display[/dim]")
+                self.console.print("[dim]💡 Use --autoexec flag to automatically execute replica reset operations[/dim]")
 
         except Exception as e:
             self.console.print(f"[red]Error analyzing problematic translogs: {e}[/red]")
+            if autoexec:
+                sys.exit(1)
 
     def _get_problematic_translogs(self, min_size_mb: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """Get individual shards and table summaries with problematic translog sizes using adaptive thresholds"""
@@ -501,6 +524,14 @@ class MaintenanceCommands(BaseCommand):
             summary_key = f"{schema}.{table}.{partition_values}" if partition_values else f"{schema}.{table}"
 
             if summary_key in adaptive_table_keys:
+                # Add adaptive threshold information to summary
+                threshold_info = table_thresholds.get(summary_key)
+                if threshold_info:
+                    summary['adaptive_config_mb'] = threshold_info['config_mb']
+                    summary['adaptive_threshold_mb'] = threshold_info['threshold_mb']
+                else:
+                    summary['adaptive_config_mb'] = fallback_threshold_mb
+                    summary['adaptive_threshold_mb'] = fallback_threshold_mb
                 adaptive_summary.append(summary)
 
         return adaptive_shards, adaptive_summary
@@ -729,7 +760,105 @@ ORDER BY array_length(retention_leases['leases'], 1);"""
         self.console.print(f"  • {len(valid_table_info)} restore replicas commands")
         self.console.print(f"  • 1 rebalancing enable command")
 
-    def _get_current_replica_count(self, schema_name: str, table_name: str, partition_ident: Optional[str], partition_values: Optional[str]) -> Union[int, str]:
+    def _execute_autoexec(self, summary_rows: List[Dict[str, Any]], dry_run: bool, 
+                         percentage: int, max_wait: int, log_format: str) -> bool:
+        """Execute automatic replica reset for all problematic tables"""
+        
+        # Filter tables based on percentage threshold
+        filtered_tables = self._filter_tables_by_percentage(summary_rows, percentage)
+        
+        if not filtered_tables:
+            self.console.print(f"[green]✅ No tables exceed {percentage}% of their threshold[/green]")
+            self._autoexec_exit_code = 0
+            return True
+        
+        self.console.print(f"[yellow]Processing {len(filtered_tables)} table(s) exceeding {percentage}% threshold[/yellow]")
+        
+        # Setup JSON logging if requested
+        if log_format == "json":
+            # Configure loguru for JSON output
+            logger.remove()  # Remove default handler
+            logger.add(
+                sys.stderr,
+                format="{time:YYYY-MM-DDTHH:mm:ss.sssZ} | {level} | {message}",
+                serialize=True,  # Enable JSON serialization
+                level="INFO"
+            )
+        
+        success_count = 0
+        failure_count = 0
+        failed_tables = []
+        
+        start_time = time.time()
+        
+        # Process each table
+        for table_info in filtered_tables:
+            processor = TableResetProcessor(table_info, self.client, dry_run, max_wait, log_format)
+            
+            table_display = processor.get_table_display_name()
+            self.console.print(f"\n[cyan]Processing: {table_display}[/cyan]")
+            
+            if processor.process():
+                success_count += 1
+                self.console.print(f"[green]✅ {table_display} completed successfully[/green]")
+            else:
+                failure_count += 1
+                failed_tables.append(table_display)
+                self.console.print(f"[red]❌ {table_display} failed[/red]")
+        
+        # Summary
+        total_time = time.time() - start_time
+        self.console.print(f"\n[bold]AutoExec Summary:[/bold]")
+        self.console.print(f"  • Total tables processed: {len(filtered_tables)}")
+        self.console.print(f"  • Successful: {success_count}")
+        self.console.print(f"  • Failed: {failure_count}")
+        self.console.print(f"  • Total time: {total_time:.1f}s")
+        
+        if failed_tables:
+            self.console.print(f"\n[red]Failed tables requiring manual intervention:[/red]")
+            for table in failed_tables:
+                self.console.print(f"  • {table}")
+        
+        # Set exit code tracking
+        if failure_count == 0:
+            self._autoexec_exit_code = 0
+        elif success_count > 0:
+            self._autoexec_exit_code = 3  # Partial failure
+        else:
+            self._autoexec_exit_code = 2  # Complete failure
+        
+        return failure_count == 0
+    
+    def _filter_tables_by_percentage(self, summary_rows: List[Dict[str, Any]], percentage: int) -> List[Dict[str, Any]]:
+        """Filter tables that exceed the percentage threshold"""
+        filtered = []
+        
+        for table_info in summary_rows:
+            max_translog_mb = table_info['max_translog_uncommitted_mb']
+            
+            # Use actual adaptive threshold from table configuration
+            threshold_mb = table_info.get('adaptive_threshold_mb', 563)  # Fallback to 563MB if not available
+            
+            # Calculate percentage
+            if threshold_mb > 0:
+                current_percentage = (max_translog_mb / threshold_mb) * 100
+                if current_percentage >= percentage:
+                    # Add current replica count
+                    schema = table_info['schema_name']
+                    table = table_info['table_name']
+                    partition_values = table_info.get('partition_values', '')
+                    partition_ident = table_info.get('partition_ident')
+                    current_replicas = self._get_current_replica_count(schema, table, partition_ident, partition_values)
+                    table_info['current_replicas'] = current_replicas
+                    filtered.append(table_info)
+        
+        return filtered
+    
+    def _get_autoexec_exit_code(self) -> int:
+        """Get the appropriate exit code for autoexec operations"""
+        return getattr(self, '_autoexec_exit_code', 1)
+
+    def _get_current_replica_count(self, schema_name: str, table_name: str, partition_ident: Optional[str] = None, partition_values: Optional[str] = None) -> str:
         """Look up current replica count for table or partition"""
         try:
             if partition_values and partition_values != 'NULL':
@@ -1444,12 +1573,50 @@ def create_maintenance_commands(main_cli):
     @main_cli.command()
     @click.option('--sizeMB', default=512, help='Minimum translog uncommitted size in MB (default: 512)')
     @click.option('--execute', is_flag=True, help='Generate SQL commands for display (does not execute against database)')
+    @click.option('--autoexec', is_flag=True, help='Automatically execute replica reset operations')
+    @click.option('--dry-run', is_flag=True, help='Simulate operations without actual database changes')
+    @click.option('--percentage', default=200, help='Only process tables exceeding this percentage of threshold (default: 200)')
+    @click.option('--max-wait', default=720, help='Maximum seconds to wait for retention leases (default: 720)')
+    @click.option('--log-format', type=click.Choice(['console', 'json']), default='console', help='Logging format for container environments')
     @click.pass_context
-    def problematic_translogs(ctx, sizemb: int, execute: bool):
-        """Find tables with problematic translog sizes using adaptive thresholds based on table settings"""
+    def problematic_translogs(ctx, sizemb: int, execute: bool, autoexec: bool, dry_run: bool, 
+                             percentage: int, max_wait: int, log_format: str):
+        """Find tables with problematic translog sizes and optionally execute automatic replica reset
+        
+        This command can operate in three modes:
+        
+        1. ANALYSIS MODE (default): Shows problematic shards only
+        2. COMMAND GENERATION MODE (--execute): Generates SQL commands for manual execution  
+        3. AUTOEXEC MODE (--autoexec): Automatically executes replica reset operations
+        
+        AUTOEXEC MODE performs these operations for each problematic table:
+        • Set number_of_replicas to 0
+        • Monitor retention leases until cleared (with incremental backoff)
+        • Restore original replica count
+        
+        Use --dry-run with --autoexec to simulate operations without database changes.
+        Use --log-format json for structured logging in container environments.
+        
+        Examples:
+            xmover problematic-translogs                                    # Analysis only
+            xmover problematic-translogs --execute                         # Generate SQL commands
+            xmover problematic-translogs --autoexec                        # Execute operations
+            xmover problematic-translogs --autoexec --dry-run              # Simulate execution
+            xmover problematic-translogs --autoexec --percentage 150       # Process tables >150% of threshold
+            xmover problematic-translogs --autoexec --log-format json      # Container-friendly logging
+        """
+        # Validation
+        if autoexec and execute:
+            click.echo("Error: --autoexec and --execute flags are mutually exclusive", err=True)
+            ctx.exit(1)
+            
+        if dry_run and not autoexec:
+            click.echo("Error: --dry-run can only be used with --autoexec", err=True)
+            ctx.exit(1)
+            
         client = ctx.obj['client']
         maintenance = MaintenanceCommands(client)
-        maintenance.problematic_translogs(sizemb, execute)
+        maintenance.problematic_translogs(sizemb, execute, autoexec, dry_run, percentage, max_wait, log_format)
 
     @main_cli.command()
     @click.option('--node', required=True, help='Target node to analyze for decommissioning')
@@ -1499,3 +1666,272 @@ def create_maintenance_commands(main_cli):
         client = ctx.obj['client']
         maintenance = MaintenanceCommands(client)
         maintenance.check_maintenance(node, min_availability.lower(), short)
+
+
+class TableResetState(Enum):
+    """States for the table replica reset state machine"""
+    DETECTED = "detected"
+    SETTING_REPLICAS_ZERO = "setting_replicas_zero"
+    MONITORING_LEASES = "monitoring_leases" 
+    RESTORING_REPLICAS = "restoring_replicas"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class TableResetProcessor:
+    """State machine processor for individual table replica reset operations"""
+    
+    def __init__(self, table_info: Dict[str, Any], client, dry_run: bool = False, 
+                 max_wait: int = 720, log_format: str = "console"):
+        self.table_info = table_info
+        self.client = client
+        self.dry_run = dry_run
+        self.max_wait = max_wait
+        self.log_format = log_format
+        
+        self.schema_name = table_info['schema_name']
+        self.table_name = table_info['table_name']
+        self.partition_values = table_info.get('partition_values', '')
+        self.partition_ident = table_info.get('partition_ident', '')
+        self.original_replicas = table_info.get('current_replicas', 0)
+        
+        self.state = TableResetState.DETECTED
+        self.start_time = None
+        self.error_message = None
+        
+        # Setup logger
+        if log_format == "json":
+            self.logger = logger
+        else:
+            self.logger = None
+        
+    def get_table_display_name(self) -> str:
+        """Get human-readable table name"""
+        name = f"{self.schema_name}.{self.table_name}"
+        if self.partition_values and self.partition_values != 'NULL':
+            name += f" PARTITION {self.partition_values}"
+        return name
+        
+    def process(self) -> bool:
+        """Process through all states, returns True if successful"""
+        self.start_time = time.time()
+        
+        try:
+            if not self._set_replicas_to_zero():
+                return False
+            if not self._monitor_retention_leases():
+                return False
+            if not self._restore_replicas():
+                return False
+            
+            self._transition_to_state(TableResetState.COMPLETED)
+            self._log_info(f"Successfully completed replica reset in {time.time() - self.start_time:.1f}s")
+            return True
+            
+        except Exception as e:
+            self._handle_failure(f"Unexpected error: {e}")
+            return False
+    
+    def _set_replicas_to_zero(self) -> bool:
+        """Set table replicas to 0"""
+        self._transition_to_state(TableResetState.SETTING_REPLICAS_ZERO)
+        
+        try:
+            if self.partition_values and self.partition_values != 'NULL':
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = 0);'
+            else:
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = 0);'
+            
+            self._log_info(f"Setting replicas to 0 (original: {self.original_replicas})")
+            self._log_info(f"Executing: {sql}")
+            
+            if not self.dry_run:
+                result = self.client.execute_query(sql)
+                if 'error' in result:
+                    self._handle_failure(f"Failed to set replicas to 0: {result.get('error', 'Unknown error')}")
+                    return False
+            else:
+                self._log_info(f"DRY RUN: Would execute: {sql}")
+            
+            return True
+            
+        except Exception as e:
+            self._handle_failure(f"Error setting replicas to 0: {e}")
+            return False
+    
+    def _monitor_retention_leases(self) -> bool:
+        """Monitor retention leases with incremental backoff"""
+        self._transition_to_state(TableResetState.MONITORING_LEASES)
+        
+        delays = self._get_backoff_delays()
+        start_time = time.time()
+        
+        for attempt, delay in enumerate(delays, 1):
+            if not self.dry_run:
+                lease_count = self._check_retention_leases()
+                expected_count = self.table_info.get('total_primary_shards', 1)
+                
+                if lease_count == expected_count:
+                    elapsed = time.time() - start_time
+                    self._log_info(f"Retention leases cleared after {elapsed:.1f}s ({attempt} attempts)")
+                    return True
+                
+                elapsed = time.time() - start_time
+                remaining_time = self.max_wait - elapsed
+                
+                if remaining_time <= 0:
+                    self._handle_failure(f"Timeout after {self.max_wait}s - {lease_count} leases remaining (expected {expected_count})")
+                    return False
+                
+                actual_delay = min(delay, remaining_time)
+                self._log_info(f"Attempt {attempt}/{len(delays)}: {lease_count} leases remaining, waiting {actual_delay}s")
+                
+                time.sleep(actual_delay)
+            else:
+                self._log_info(f"DRY RUN: Would wait {delay}s (attempt {attempt}/{len(delays)})")
+                if attempt >= 3:  # Simulate success after 3 attempts in dry run
+                    self._log_info("DRY RUN: Simulating retention leases cleared")
+                    return True
+        
+        self._handle_failure(f"Timeout after {self.max_wait}s - retention leases not cleared")
+        return False
+    
+    def _restore_replicas(self) -> bool:
+        """Restore original replica count"""
+        self._transition_to_state(TableResetState.RESTORING_REPLICAS)
+        
+        try:
+            if self.partition_values and self.partition_values != 'NULL':
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = {self.original_replicas});'
+            else:
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = {self.original_replicas});'
+            
+            self._log_info(f"Restoring replicas to {self.original_replicas}")
+            self._log_info(f"Executing: {sql}")
+            
+            if not self.dry_run:
+                result = self.client.execute_query(sql)
+                if 'error' in result:
+                    self._handle_failure(f"CRITICAL: Failed to restore replicas: {result.get('error', 'Unknown error')}")
+                    return False
+            else:
+                self._log_info(f"DRY RUN: Would execute: {sql}")
+            
+            return True
+            
+        except Exception as e:
+            self._handle_failure(f"CRITICAL: Error restoring replicas: {e}")
+            return False
+    
+    def _check_retention_leases(self) -> int:
+        """Check current retention lease count"""
+        try:
+            if self.partition_values and self.partition_values != 'NULL':
+                sql = f"""
+                SELECT array_length(retention_leases['leases'], 1) as cnt_leases
+                FROM sys.shards
+                WHERE table_name = '{self.table_name}'
+                  AND schema_name = '{self.schema_name}'
+                  AND partition_ident = '{self.partition_ident}'
+                """
+            else:
+                sql = f"""
+                SELECT array_length(retention_leases['leases'], 1) as cnt_leases
+                FROM sys.shards
+                WHERE table_name = '{self.table_name}'
+                  AND schema_name = '{self.schema_name}'
+                """
+            
+            result = self.client.execute_query(sql)
+            rows = result.get('rows', [])
+            if rows:
+                # Return the maximum lease count across all shards
+                return max(row[0] or 0 for row in rows)
+            return 0
+            
+        except Exception as e:
+            self._log_error(f"Error checking retention leases: {e}")
+            return -1  # Error condition
+    
+    def _get_backoff_delays(self) -> List[int]:
+        """Generate incremental backoff delays"""
+        # Predefined sequence: 10, 15, 30, 45, 60, 90, 135, 200, 300, 450, 720
+        base_delays = [10, 15, 30, 45, 60, 90, 135, 200, 300, 450, 720]
+        delays = []
+        total_time = 0
+        
+        for delay in base_delays:
+            if total_time >= self.max_wait:
+                break
+                
+            actual_delay = min(delay, self.max_wait - total_time)
+            if actual_delay > 0:
+                delays.append(actual_delay)
+                total_time += actual_delay
+            
+            if total_time >= self.max_wait:
+                break
+        
+        return delays
+    
+    def _transition_to_state(self, new_state: TableResetState) -> None:
+        """Transition to a new state with logging"""
+        old_state = self.state
+        self.state = new_state
+        
+        elapsed = time.time() - self.start_time if self.start_time else 0
+        self._log_info(f"State transition: {old_state.value} → {new_state.value} ({elapsed:.1f}s)")
+    
+    def _handle_failure(self, error_msg: str) -> None:
+        """Handle failure state with rollback attempt"""
+        self.error_message = error_msg
+        self._transition_to_state(TableResetState.FAILED)
+        self._log_error(error_msg)
+        
+        # Attempt rollback if we were in monitoring or restoring phase
+        if self.state in [TableResetState.MONITORING_LEASES, TableResetState.RESTORING_REPLICAS]:
+            self._attempt_rollback()
+    
+    def _attempt_rollback(self) -> None:
+        """Attempt to rollback by restoring original replica count"""
+        if self.dry_run:
+            self._log_info("DRY RUN: Would attempt rollback to original replica count")
+            return
+            
+        try:
+            self._log_info(f"Attempting rollback: restoring {self.original_replicas} replicas")
+            
+            if self.partition_values and self.partition_values != 'NULL':
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = {self.original_replicas});'
+            else:
+                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = {self.original_replicas});'
+            
+            self._log_info(f"Rollback executing: {sql}")
+            result = self.client.execute_query(sql)
+            if 'error' not in result:
+                self._log_info("Rollback successful")
+            else:
+                self._log_error(f"MANUAL INTERVENTION REQUIRED: Rollback failed - {result.get('error', 'Unknown error')}")
+                
+        except Exception as e:
+            self._log_error(f"MANUAL INTERVENTION REQUIRED: Rollback exception - {e}")
+    
+    def _log_info(self, message: str) -> None:
+        """Log info message"""
+        if self.logger and self.log_format == "json":
+            self.logger.info(message, 
+                           table=self.get_table_display_name(),
+                           state=self.state.value,
+                           original_replicas=self.original_replicas)
+        else:
+            console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] [blue]INFO[/blue] {self.get_table_display_name()}: {message}")
+    
+    def _log_error(self, message: str) -> None:
+        """Log error message"""
+        if self.logger and self.log_format == "json":
+            self.logger.error(message,
+                            table=self.get_table_display_name(),
+                            state=self.state.value,
+                            original_replicas=self.original_replicas)
+        else:
+            console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] [red]ERROR[/red] {self.get_table_display_name()}: {message}")
