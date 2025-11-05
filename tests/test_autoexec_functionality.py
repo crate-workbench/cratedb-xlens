@@ -10,8 +10,8 @@ import time
 from unittest.mock import Mock, patch, MagicMock
 from enum import Enum
 
-from src.xmover.commands.maintenance import TableResetProcessor, TableResetState, MaintenanceCommands
-from src.xmover.database import CrateDBClient
+from xmover.commands.maintenance import TableResetProcessor, TableResetState, MaintenanceCommands
+from xmover.database import CrateDBClient
 
 
 class TestTableResetState:
@@ -432,7 +432,7 @@ class TestMaintenanceCommandsAutoexec:
         # Both tables should exceed 100% of 563MB threshold
         assert len(filtered) == 2
     
-    @patch('src.xmover.commands.maintenance.TableResetProcessor')
+    @patch('xmover.commands.maintenance.TableResetProcessor')
     def test_execute_autoexec_success(self, mock_processor_class, maintenance_commands, sample_summary_rows):
         """Test successful autoexec execution"""
         # Mock processor instances
@@ -450,7 +450,7 @@ class TestMaintenanceCommandsAutoexec:
         assert mock_processor_class.call_count == len(sample_summary_rows)
         assert mock_processor.process.call_count == len(sample_summary_rows)
     
-    @patch('src.xmover.commands.maintenance.TableResetProcessor')
+    @patch('xmover.commands.maintenance.TableResetProcessor')
     def test_execute_autoexec_partial_failure(self, mock_processor_class, maintenance_commands, sample_summary_rows):
         """Test autoexec with some failures"""
         # Mock processor - first succeeds, second fails
@@ -471,7 +471,7 @@ class TestMaintenanceCommandsAutoexec:
         assert result is False
         assert maintenance_commands._get_autoexec_exit_code() == 3  # Partial failure
     
-    @patch('src.xmover.commands.maintenance.TableResetProcessor')
+    @patch('xmover.commands.maintenance.TableResetProcessor')
     def test_execute_autoexec_complete_failure(self, mock_processor_class, maintenance_commands, sample_summary_rows):
         """Test autoexec with complete failure"""
         # Mock processor - all fail
@@ -497,13 +497,13 @@ class TestMaintenanceCommandsAutoexec:
         assert result is True  # Success when nothing to process
         assert maintenance_commands._get_autoexec_exit_code() == 0
     
-    @patch('src.xmover.commands.maintenance.logger')
+    @patch('xmover.commands.maintenance.logger')
     def test_execute_autoexec_json_logging(self, mock_logger, maintenance_commands, sample_summary_rows):
         """Test autoexec with JSON logging format"""
         # Use tables that will pass the filter to ensure logging setup happens
         maintenance_commands._filter_tables_by_percentage = Mock(return_value=sample_summary_rows)
         
-        with patch('src.xmover.commands.maintenance.TableResetProcessor') as mock_processor:
+        with patch('xmover.commands.maintenance.TableResetProcessor') as mock_processor:
             mock_processor.return_value.process.return_value = True
             mock_processor.return_value.get_table_display_name.return_value = "test.table"
             

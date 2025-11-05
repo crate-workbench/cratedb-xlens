@@ -10,9 +10,9 @@ import sys
 from unittest.mock import Mock, patch, MagicMock
 from click.testing import CliRunner
 
-from src.xmover.cli import main
-from src.xmover.commands.maintenance import MaintenanceCommands
-from src.xmover.database import CrateDBClient
+from xmover.cli import main
+from xmover.commands.maintenance import MaintenanceCommands
+from xmover.database import CrateDBClient
 
 
 class TestAutoexecCLI:
@@ -48,7 +48,7 @@ class TestAutoexecCLI:
     
     def test_autoexec_and_execute_flags_mutually_exclusive(self, runner):
         """Test that --autoexec and --execute cannot be used together"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
             
             result = runner.invoke(main, [
@@ -62,7 +62,7 @@ class TestAutoexecCLI:
     
     def test_dry_run_requires_autoexec(self, runner):
         """Test that --dry-run requires --autoexec"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
             
             result = runner.invoke(main, [
@@ -75,8 +75,8 @@ class TestAutoexecCLI:
     
     def test_autoexec_basic_invocation(self, runner):
         """Test basic autoexec invocation"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             # Setup mocks
             mock_client = Mock()
@@ -109,8 +109,8 @@ class TestAutoexecCLI:
     
     def test_autoexec_with_custom_parameters(self, runner):
         """Test autoexec with custom parameter values"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -139,8 +139,8 @@ class TestAutoexecCLI:
     
     def test_dry_run_with_autoexec(self, runner):
         """Test dry run mode with autoexec"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -163,7 +163,7 @@ class TestAutoexecCLI:
     
     def test_log_format_validation(self, runner):
         """Test log format parameter validation"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
             
             # Test invalid log format
@@ -178,8 +178,8 @@ class TestAutoexecCLI:
     
     def test_percentage_parameter_validation(self, runner):
         """Test percentage parameter accepts integers"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -201,8 +201,8 @@ class TestAutoexecCLI:
     
     def test_max_wait_parameter_validation(self, runner):
         """Test max-wait parameter accepts integers"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -224,7 +224,7 @@ class TestAutoexecCLI:
     
     def test_connection_failure_handling(self, runner):
         """Test handling of database connection failures"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = False
             mock_client_class.return_value = mock_client
@@ -239,8 +239,8 @@ class TestAutoexecCLI:
     
     def test_autoexec_failure_exit_code(self, runner):
         """Test that autoexec failures result in proper exit codes"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class, \
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class, \
              patch('sys.exit') as mock_exit:
             
             mock_client = Mock()
@@ -260,8 +260,8 @@ class TestAutoexecCLI:
     
     def test_backwards_compatibility_existing_flags(self, runner):
         """Test that existing flags still work as before"""
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -317,7 +317,7 @@ class TestAutoexecCLIErrorMessages:
         """Test clear error message for conflicting flags"""
         runner = CliRunner()
         
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
             
             result = runner.invoke(main, [
@@ -333,7 +333,7 @@ class TestAutoexecCLIErrorMessages:
         """Test clear error message for dry-run without autoexec"""
         runner = CliRunner()
         
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
             
             result = runner.invoke(main, [
@@ -376,8 +376,8 @@ class TestAutoexecCLIEdgeCases:
         """Test behavior with zero max-wait"""
         runner = CliRunner()
         
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -401,8 +401,8 @@ class TestAutoexecCLIEdgeCases:
         """Test behavior with very high percentage values"""
         runner = CliRunner()
         
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -426,8 +426,8 @@ class TestAutoexecCLIEdgeCases:
         """Test using all autoexec parameters together"""
         runner = CliRunner()
         
-        with patch('src.xmover.database.CrateDBClient') as mock_client_class, \
-             patch('src.xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class, \
+             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
             
             mock_client = Mock()
             mock_client.test_connection.return_value = True

@@ -11,8 +11,8 @@ from unittest.mock import Mock, patch, MagicMock
 import tempfile
 import json
 
-from src.xmover.commands.maintenance import MaintenanceCommands, TableResetProcessor, TableResetState
-from src.xmover.database import CrateDBClient
+from xmover.commands.maintenance import MaintenanceCommands, TableResetProcessor, TableResetState
+from xmover.database import CrateDBClient
 
 
 class MockCrateDBClient:
@@ -312,8 +312,8 @@ class TestAutoexecRealWorldScenarios:
         # Return tables so JSON logging configuration is triggered
         maintenance._filter_tables_by_percentage = Mock(return_value=sample_problematic_tables)
         
-        with patch('src.xmover.commands.maintenance.logger') as mock_logger, \
-             patch('src.xmover.commands.maintenance.TableResetProcessor') as mock_processor:
+        with patch('xmover.commands.maintenance.logger') as mock_logger, \
+             patch('xmover.commands.maintenance.TableResetProcessor') as mock_processor:
             
             # Mock processor to avoid actual processing
             mock_processor.return_value.process.return_value = True
@@ -349,7 +349,7 @@ class TestAutoexecRealWorldScenarios:
             'current_replicas': 1
         }
         
-        with patch('src.xmover.commands.maintenance.TableResetProcessor') as mock_processor:
+        with patch('xmover.commands.maintenance.TableResetProcessor') as mock_processor:
             # First processor succeeds, second fails
             mock_instances = [Mock(), Mock()]
             mock_instances[0].process.return_value = True
