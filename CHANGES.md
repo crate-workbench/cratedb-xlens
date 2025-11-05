@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Enhanced `problematic-translogs` command**: Adaptive threshold detection based on table settings
+  - Default `--sizeMB` changed from 300MB to 512MB (CrateDB default flush threshold)
+  - Adaptive thresholds: Uses table-specific `flush_threshold_size * 1.1` for intelligent detection
+  - Performance optimized: Only queries table settings for tables with initially problematic shards
+  - Enhanced display: Shows both configured value and calculated threshold (e.g., "2048MB/2253MB config/threshold")
+  - Partition support: Handles partition-specific flush_threshold_size settings
+  - Clean CLI: Simplified help text for better usability
+  - Fixed REROUTE CANCEL commands to include partition information for partitioned tables
+
 - **First loguru integration**: `read-check` is the first command to use structured logging
 - **Enhanced per-table statistics**: Shows document change tracking and performance metrics
   - Document changes: Total change with min/avg/max deltas

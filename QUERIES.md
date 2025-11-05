@@ -824,3 +824,30 @@ FROM information_schema.tables
 WHERE settings['merge']['scheduler']['max_thread_count'] = 1;
 
 ```
+
+cr> SELECT
+table_schema,
+table_name,
+partitioned_by, settings['translog']['flush_threshold_size']
+FROM information_schema.tables
+WHERE table_name = 'orderFormFieldData';
++--------------+--------------------+----------------+----------------------------------------------+
+| table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
++--------------+--------------------+----------------+----------------------------------------------+
+| TURVO | orderFormFieldData | NULL | 2147483648 |
++--------------+--------------------+----------------+----------------------------------------------+
+SELECT 1 row in set (0.232 sec)
+cr> SELECT
+table_schema,
+table_name,
+partitioned_by, settings['translog']['flush_threshold_size']
+FROM information_schema.tables
+WHERE table_name = 'account';
++--------------------------------+------------+----------------+----------------------------------------------+
+| table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
++--------------------------------+------------+----------------+----------------------------------------------+
+| TURVO_MySQL | account | NULL | 536870912 |
+| replication_third_materialized | account | NULL | 536870912 |
++--------------------------------+------------+----------------+----------------------------------------------+
+SELECT 2 rows in set (0.226 sec)
+cr>
