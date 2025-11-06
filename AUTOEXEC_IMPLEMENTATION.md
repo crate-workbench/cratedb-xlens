@@ -1,500 +1,249 @@
-# XMover Problematic Translogs AutoExec Implementation
+# AutoExec Feature: Technical Implementation
 
-## Overview
+## Summary
 
-The `problematic-translogs --autoexec` feature extends the existing translog analysis command to automatically execute replica reset operations without manual intervention. This implementation is **COMPLETED** and production-ready, designed to run robustly in Kubernetes containers and production environments.
+The `--autoexec` flag extends `problematic-translogs` to automatically execute replica reset operations for tables with problematic translog sizes. This addresses a known CrateDB issue where replica shards accumulate large uncommitted translogs requiring manual intervention.
 
-## Implementation Status: ✅ COMPLETE
+**Implementation approach:** Set replicas to 0, monitor retention lease clearance, restore original replica count.
 
-- ✅ State machine architecture implemented
-- ✅ Incremental backoff retry logic
-- ✅ Comprehensive error handling and rollback
-- ✅ Dry run simulation mode
-- ✅ Container-friendly JSON logging
-- ✅ CLI interface with parameter validation
-- ✅ Comprehensive test suite (37/37 tests passing)
-- ✅ Integration tests and performance validation
-- ✅ Production-ready demo and documentation
+## Technical Implementation
 
-## Architecture
+### Core Workflow
 
-### State Machine Design
+```
+1. Identify tables exceeding translog thresholds (using adaptive flush_threshold_size)
+2. For each problematic table/partition:
+   a. ALTER TABLE SET ("number_of_replicas" = 0)
+   b. Monitor sys.shards until retention_leases['leases'] count equals primary shard count
+   c. ALTER TABLE SET ("number_of_replicas" = <original_value>)
+```
 
-Each problematic table/partition is processed through a well-defined state machine:
+### State Machine
 
 ```
 DETECTED → SETTING_REPLICAS_ZERO → MONITORING_LEASES → RESTORING_REPLICAS → COMPLETED
-    ↓                ↓                      ↓                   ↓
-  FAILED           FAILED                FAILED              FAILED
+                                                 ↓
+                                              FAILED (with rollback attempt)
 ```
 
-### Core Components
+**State tracking:** Each table processed independently via `TableResetProcessor` class.
 
-1. **TableResetProcessor**: Manages individual table state transitions
-2. **AutoExecOrchestrator**: Coordinates multiple table processors
-3. **RetentionLeaseMonitor**: Handles lease monitoring with backoff
-4. **StructuredLogger**: Container-optimized logging
+### CrateDB-Specific Queries
 
-## Command Interface
-
-```bash
-# Basic autoexec usage
-xmover problematic-translogs --autoexec
-
-# With custom parameters
-xmover problematic-translogs --autoexec --percentage 150 --max-wait 900 --dry-run
-
-# Container/K8s usage with structured logging
-xmover problematic-translogs --autoexec --log-format json
+**Retention lease monitoring:**
+```sql
+SELECT array_length(retention_leases['leases'], 1) as cnt_leases
+FROM sys.shards
+WHERE table_name = ? AND schema_name = ? AND partition_ident = ?
 ```
 
-### New CLI Parameters
+**Replica count lookup:**
+```sql
+-- Non-partitioned tables
+SELECT number_of_replicas
+FROM information_schema.tables
+WHERE table_name = ? AND table_schema = ?
 
-| Parameter      | Type   | Default | Description                                       |
-| -------------- | ------ | ------- | ------------------------------------------------- |
-| `--autoexec`   | flag   | False   | Enable automatic execution of replica reset       |
-| `--dry-run`    | flag   | False   | Simulate operations without DB changes            |
-| `--percentage` | int    | 200     | Only process tables exceeding this % of threshold |
-| `--max-wait`   | int    | 720     | Maximum seconds to wait for retention leases      |
-| `--log-format` | choice | console | Logging format: console, json                     |
-| `--concurrent` | int    | 1       | Number of tables to process concurrently          |
-
-## State Machine Implementation
-
-### TableResetProcessor States
-
-#### 1. DETECTED
-
-- **Entry**: Table identified as problematic
-- **Actions**: Validate table exists, get current replica count
-- **Next State**: SETTING_REPLICAS_ZERO
-- **Failure**: FAILED
-
-#### 2. SETTING_REPLICAS_ZERO
-
-- **Entry**: Execute `ALTER TABLE ... SET ("number_of_replicas" = 0)`
-- **Actions**:
-  - Store original replica count
-  - Execute SQL command
-  - Verify replica count changed
-- **Next State**: MONITORING_LEASES
-- **Failure**: FAILED (attempt rollback)
-
-#### 3. MONITORING_LEASES
-
-- **Entry**: Begin retention lease monitoring
-- **Actions**:
-  - Query `sys.shards` for retention lease count
-  - Use incremental backoff strategy
-  - Track elapsed time vs max_wait
-- **Success Condition**: `cnt_leases == expected_primary_count`
-- **Next State**: RESTORING_REPLICAS
-- **Failure**: FAILED (timeout or error)
-
-#### 4. RESTORING_REPLICAS
-
-- **Entry**: Execute `ALTER TABLE ... SET ("number_of_replicas" = original_count)`
-- **Actions**:
-  - Restore original replica count
-  - Verify replica count restored
-- **Next State**: COMPLETED
-- **Failure**: FAILED (critical - manual intervention needed)
-
-#### 5. COMPLETED
-
-- **Entry**: All operations successful
-- **Actions**: Log success metrics
-- **Terminal State**: Success
-
-#### 6. FAILED
-
-- **Entry**: Any operation failed
-- **Actions**:
-  - Log failure details
-  - Attempt rollback if safe
-  - Record state for manual intervention
-- **Terminal State**: Failure
-
-## Retry and Backoff Strategy
-
-### Incremental Backoff Delays
-
-```
-Attempt 1:  10 seconds
-Attempt 2:  15 seconds
-Attempt 3:  30 seconds
-Attempt 4:  45 seconds
-Attempt 5:  60 seconds
-Attempt 6:  90 seconds
-Attempt 7: 135 seconds
-Attempt 8: 200 seconds
-Attempt 9: 300 seconds
-Attempt 10: 450 seconds
-Attempt 11: 720 seconds (final)
+-- Partitioned tables
+SELECT number_of_replicas
+FROM information_schema.table_partitions
+WHERE table_name = ? AND table_schema = ? AND partition_ident = ?
 ```
 
-### Retry Logic
+**Adaptive threshold detection:**
+```sql
+SELECT table_schema, table_name,
+       settings['translog']['flush_threshold_size'] as flush_threshold_size
+FROM information_schema.tables
+WHERE table_name = ? AND table_schema = ?
+```
 
-- **Retention Lease Monitoring**: Full backoff sequence
-- **SQL Operations**: 3 immediate retries with 5-second delay
-- **Connection Issues**: 5 retries with exponential backoff
+### Partition Handling
 
-## Error Handling & Recovery
+Partitioned tables use partition-specific ALTER TABLE syntax:
+```sql
+ALTER TABLE "schema"."table" PARTITION (date='2024-01-01') SET ("number_of_replicas" = 0);
+```
 
-### Failure Scenarios
+Partition identification via `sys.shards.partition_ident` and `information_schema.table_partitions`.
 
-1. **Connection Failures**
-   - Retry with exponential backoff
-   - Fail fast after 5 attempts
-   - Preserve state for resume
+## Security Considerations
 
-2. **SQL Execution Failures**
-   - Log exact error and SQL command
-   - Attempt rollback if safe
-   - Mark table as FAILED
+### SQL Injection Prevention
 
-3. **Retention Lease Timeout**
-   - Log current lease count
-   - Log original replica count for manual restoration
-   - Exit with error code 2
+All queries use parameterized statements:
+```python
+# Before (vulnerable)
+sql = f"WHERE table_name = '{table_name}'"
 
-4. **Partial Processing Failures**
-   - Continue processing other tables
-   - Report summary of successes/failures
-   - Exit with appropriate error code
+# After (secure)
+sql = "WHERE table_name = ?"
+params = [table_name]
+result = client.execute_query(sql, params)
+```
+
+**Validation:** Schema/table identifiers validated to reject characters that could break out of quoted identifiers (specifically `"`).
+
+### Required Permissions
+
+- `ALTER TABLE` on target schemas
+- `SELECT` on `sys.shards`, `information_schema.tables`, `information_schema.table_partitions`
+
+### Rollback Safety
+
+On failure during `MONITORING_LEASES` or `RESTORING_REPLICAS` states:
+1. Attempt to restore original replica count
+2. Log CRITICAL error with table name and original replica count if rollback fails
+3. Manual intervention required
+
+**Critical bug fixed:** Rollback previously never executed due to state check occurring after state transition to FAILED. Fixed by capturing previous state before transition.
+
+## Retry Strategy
+
+### Retention Lease Monitoring
+
+Incremental backoff delays (seconds): 10, 15, 30, 45, 60, 90, 135, 200, 300, 450, 720
+
+**Rationale:** Retention lease clearance depends on cluster load and replication speed. Aggressive retries waste resources; incremental backoff balances responsiveness with cluster impact.
+
+**Timeout handling:** Configurable via `--max-wait` (default: 720s). On timeout, log current lease count and fail with exit code 2.
+
+## Error Handling
 
 ### Exit Codes
 
-- **0**: All operations successful
-- **1**: General error (connection, invalid parameters)
-- **2**: Timeout waiting for retention leases
-- **3**: Partial failure (some tables failed)
-- **4**: Critical failure (unable to restore replicas)
+- `0`: Success (all tables processed)
+- `1`: General error (connection failure, invalid parameters)
+- `2`: Complete failure (all tables failed)
+- `3`: Partial failure (some tables succeeded, some failed)
 
-### Rollback Strategy
+### Error Recovery
 
-```python
-def rollback_operations(self):
-    """Attempt to rollback operations in reverse order"""
-    if self.state in [TableResetState.MONITORING_LEASES, TableResetState.RESTORING_REPLICAS]:
-        # Attempt to restore original replica count
-        try:
-            self._restore_replicas(force=True)
-            logger.info(f"Rollback successful for {self.table_name}")
-        except Exception as e:
-            logger.critical(f"MANUAL INTERVENTION REQUIRED: Failed to rollback {self.table_name}: {e}")
-```
+**Transient failures:** Connection errors, temporary database unavailability
+- Action: Fail fast, log error, continue to next table
 
-## Logging & Observability
+**Permanent failures:** Permission denied, table not found
+- Action: Mark table as failed, log error, continue to next table
 
-### Structured Logging Format
+**Critical failures:** Unable to restore replica count
+- Action: Log CRITICAL with manual intervention message, continue to next table
 
-#### Console Format (Default)
+### Logging
 
-```
-2024-01-15 10:30:15 [INFO] Starting autoexec for 3 problematic tables
-2024-01-15 10:30:16 [INFO] Processing schema.table1: DETECTED → SETTING_REPLICAS_ZERO
-2024-01-15 10:30:17 [INFO] Processing schema.table1: Replicas set to 0 (was: 2)
-2024-01-15 10:30:18 [INFO] Processing schema.table1: MONITORING_LEASES (attempt 1/11, 10s delay)
-```
+**Console mode (default):** Human-readable with timestamps and state transitions
 
-#### JSON Format (Container/K8s)
-
+**JSON mode (`--log-format json`):** Structured logging for log aggregation systems (Kubernetes, ELK stack)
 ```json
 {
   "timestamp": "2024-01-15T10:30:15.123Z",
   "level": "INFO",
-  "event": "state_transition",
-  "table": "schema.table1",
-  "from_state": "DETECTED",
-  "to_state": "SETTING_REPLICAS_ZERO",
-  "elapsed_ms": 1250,
-  "original_replicas": 2
+  "table": "schema.table",
+  "state": "MONITORING_LEASES",
+  "original_replicas": 2,
+  "elapsed_seconds": 45
 }
 ```
 
-### Key Metrics Logged
+## Code Quality Improvements
 
-- Processing duration per table
-- Total retention lease wait time
-- Success/failure counts
-- Original vs final replica counts
-- SQL commands executed
-- Error details and stack traces
+### Domain Models
 
-## Testing Strategy
-
-### Unit Tests
-
-- State machine transitions
-- Retry logic and backoff calculations
-- Error handling scenarios
-- SQL command generation
-- Rollback operations
-
-### Integration Tests
-
-- End-to-end autoexec workflows
-- Database state validation
-- Concurrent processing scenarios
-- Timeout handling
-- Network failure simulation
-
-### Test Database Setup
-
+**TableInfo dataclass:**
 ```python
-# Test fixtures for different scenarios
-@pytest.fixture
-def problematic_table_single():
-    """Single table with high translog"""
-
-@pytest.fixture
-def problematic_table_partitioned():
-    """Partitioned table with mixed translog sizes"""
-
-@pytest.fixture
-def problematic_table_timeout_scenario():
-    """Table that will timeout during lease monitoring"""
+@dataclass
+class TableInfo:
+    schema_name: str
+    table_name: str
+    partition_values: Optional[str]
+    current_replicas: int
+    max_translog_uncommitted_mb: float
+    adaptive_threshold_mb: float
 ```
 
-## Security Considerations
+Replaces untyped `Dict[str, Any]` for type safety and IDE support.
 
-### Database Permissions
+**QueryResultHelper:**
+```python
+class QueryResultHelper:
+    @staticmethod
+    def is_success(result: Dict[str, Any]) -> bool:
+        return 'error' not in result
 
-Required CrateDB permissions:
-
-- `ALTER TABLE` on target schemas
-- `SELECT` on `sys.shards`
-- `SELECT` on `information_schema.tables`
-- `SELECT` on `information_schema.table_partitions`
-
-### Audit Trail
-
-- All SQL commands logged with timestamps
-- State changes recorded
-- Original replica counts preserved
-- Failure reasons documented
-
-## Performance Considerations
-
-### Concurrent Processing
-
-- Default: Sequential processing (safe)
-- Optional: `--concurrent N` for parallel processing
-- Shared connection pool
-- Resource usage monitoring
-
-### Memory Usage
-
-- State tracking per table: ~1KB
-- Connection pooling: Configurable
-- Large cluster support: Tested up to 1000 tables
-
-### Network Optimization
-
-- Prepared statement reuse
-- Batch queries where possible
-- Connection keep-alive
-- Timeout configuration
-
-## Container & Kubernetes Integration
-
-### Docker Image Requirements
-
-```dockerfile
-# Structured logging dependencies
-RUN pip install structlog python-json-logger
-
-# Health check endpoint
-HEALTHCHECK CMD xmover test-connection || exit 1
+    @staticmethod
+    def get_error_message(result: Dict[str, Any]) -> str:
+        return result.get('error', 'Unknown error')
 ```
 
-### Kubernetes Deployment
+Standardizes CrateDB response handling across codebase.
 
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: xmover-autoexec
-spec:
-  schedule: "0 2 * * *" # Daily at 2 AM
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-            - name: xmover
-              image: xmover:latest
-              command:
-                [
-                  "xmover",
-                  "problematic-translogs",
-                  "--autoexec",
-                  "--log-format",
-                  "json",
-                ]
-              env:
-                - name: CRATE_CONNECTION_STRING
-                  valueFrom:
-                    secretKeyRef:
-                      name: cratedb-connection
-                      key: connection-string
-```
+### SQL Generation
 
-### Monitoring Integration
+**ReplicaSQLBuilder class:** Centralizes ALTER TABLE and monitoring query generation, eliminates code duplication, provides consistent identifier validation.
 
-- Prometheus metrics endpoint
-- Health check endpoint
-- Log aggregation compatible
-- Alert manager integration
+### Context Management
 
-## Example Usage Scenarios
+**JSON logging:** Uses context manager to isolate loguru configuration changes, preventing global state mutation.
 
-### Scenario 1: Daily Maintenance
+## Test Coverage
 
-```bash
-# Run daily maintenance with conservative settings
-xmover problematic-translogs --autoexec --percentage 300 --max-wait 1800
-```
+**Test suite:** 16 focused tests covering business scenarios (reduced from 44 implementation-detail tests)
 
-### Scenario 2: Emergency Response
+**Coverage:**
+- Regular and partitioned table workflows
+- Timeout and failure scenarios
+- Dry-run simulation
+- Percentage-based filtering with adaptive thresholds
+- Partial/complete failure handling
+- CLI parameter validation
 
-```bash
-# Quick response to critical translog issues
-xmover problematic-translogs --autoexec --percentage 150 --max-wait 300
-```
+**Test philosophy:** Focus on business outcomes rather than implementation details. For example, test "replica reset completes successfully" rather than "backoff delay calculation produces specific values."
 
-### Scenario 3: Dry Run Validation
+## Known Limitations
 
-```bash
-# Test what would be executed
-xmover problematic-translogs --autoexec --dry-run --log-format json
-```
+1. **Sequential processing:** Tables processed one at a time. No concurrent execution (safety over speed).
 
-## Migration Path
+2. **No resume capability:** Interrupted operations must restart from beginning. State not persisted between runs.
 
-### Phase 1: Add New Flags
+3. **Retention lease assumption:** Assumes lease count equals primary shard count when cleared. May not hold in all CrateDB versions or configurations.
 
-- Extend existing command with new parameters
-- Maintain backward compatibility
-- Add comprehensive logging
+4. **Replica range parsing:** CrateDB returns replica counts as strings like "0-1". Current implementation takes maximum value. May not be correct interpretation for all use cases.
 
-### Phase 2: State Machine Implementation
+## Integration with Existing Code
 
-- Implement TableResetProcessor
-- Add retry logic and monitoring
-- Comprehensive error handling
+### Backward Compatibility
 
-### Phase 3: Production Hardening
+- `--execute` flag (manual command generation) unchanged
+- Default behavior (analysis mode) unchanged
+- New flags (`--autoexec`, `--dry-run`) additive only
 
-- Add concurrent processing
-- Performance optimization
-- Container integration
+### Code Organization
 
-## Future Enhancements
+- `MaintenanceCommands.problematic_translogs()`: Entry point, orchestrates workflow
+- `MaintenanceCommands._execute_autoexec()`: Autoexec orchestration
+- `TableResetProcessor`: Individual table state machine
+- `ReplicaSQLBuilder`: SQL generation utilities
 
-### Planned Features
+## Performance Characteristics
 
-- **Resume capability**: Resume interrupted operations
-- **Batch size limits**: Process N tables at a time
-- **Custom retry policies**: Configurable backoff strategies
-- **Metrics export**: Prometheus/StatsD integration
-- **Web dashboard**: Real-time monitoring UI
+**Memory:** ~1KB per table for state tracking
 
-### Extensibility Points
+**Network:** 1 ALTER TABLE + N retention lease queries + 1 ALTER TABLE per table
+- N depends on cluster load and replication speed
+- Typical: 3-10 queries per table
 
-- Pluggable state machine implementations
-- Custom retry strategies
-- Additional monitoring backends
-- Alternative logging formats
+**Duration:** Primarily determined by retention lease clearance time
+- Fast clusters: 30-60 seconds per table
+- Loaded clusters: 5-10 minutes per table
+- Timeout: Configurable (default 12 minutes)
 
-## Troubleshooting Guide
+## Questions for CrateDB Core Team
 
-### Common Issues
+1. **Retention lease semantics:** Is `array_length(retention_leases['leases'], 1) == primary_shard_count` the correct success condition for all CrateDB versions?
 
-#### Issue: Timeout waiting for retention leases
+2. **Replica count parsing:** When `number_of_replicas` returns "0-1", should we interpret this as max value (1) or target value?
 
-```
-Solution:
-1. Check cluster load and recovery settings
-2. Increase --max-wait parameter
-3. Verify no other maintenance operations running
-4. Check sys.shards for stuck operations
-```
+3. **Flush threshold defaults:** Is 512MB + 10% buffer the correct default for tables without explicit `flush_threshold_size` configuration?
 
-#### Issue: Unable to restore replicas
+4. **Alternative approach:** Is there a more direct way to trigger translog flush/replica recreation than setting replicas to 0?
 
-```
-Critical: Manual intervention required
-1. Check table still exists: SELECT * FROM information_schema.tables WHERE table_name = 'X'
-2. Restore manually: ALTER TABLE X SET ("number_of_replicas" = N)
-3. Check logs for original replica count
-```
-
-#### Issue: Partial processing failures
-
-```
-Solution:
-1. Review structured logs for failure details
-2. Re-run with --dry-run to validate remaining tables
-3. Use problematic-translogs without --autoexec to analyze current state
-```
-
-This implementation provides a robust, production-ready solution for automated translog management with comprehensive error handling, observability, and recovery capabilities.
-
-## Testing Results
-
-### Core Functionality Tests: 37/37 PASSING ✅
-
-- State machine transitions: ✅
-- SQL command generation: ✅
-- Retention lease monitoring: ✅
-- Backoff delay calculation: ✅
-- Error handling and rollback: ✅
-- Dry run simulation: ✅
-- Multiple table processing: ✅
-- Exit code handling: ✅
-
-### Integration Test Coverage
-
-- Real-world scenarios simulation
-- Performance with large datasets
-- Network failure handling
-- Memory efficiency validation
-- Container logging verification
-
-### Demo Validation
-
-A comprehensive demo script (`demo_autoexec.py`) demonstrates:
-
-- Complete workflow execution
-- State transitions with logging
-- Dry run mode operation
-- Multiple table batch processing
-- Error scenarios and recovery
-- CLI interface examples
-
-## Ready for Production Use
-
-The implementation has been thoroughly tested and is ready for:
-
-- **Kubernetes deployments** (CronJob/Job resources)
-- **Manual CLI operations** by database administrators
-- **Automated maintenance scripts** in CI/CD pipelines
-- **Container environments** with structured logging
-
-## Quick Start
-
-```bash
-# Basic autoexec - process all problematic tables
-xmover problematic-translogs --autoexec
-
-# Dry run to see what would be executed
-xmover problematic-translogs --autoexec --dry-run
-
-# Container-friendly with custom settings
-xmover problematic-translogs --autoexec \
-  --log-format json \
-  --percentage 150 \
-  --max-wait 1800
-```
+5. **Safety concerns:** Are there scenarios where setting replicas to 0 could cause data loss or corruption?

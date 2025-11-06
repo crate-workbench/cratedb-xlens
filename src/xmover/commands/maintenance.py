@@ -582,12 +582,16 @@ class MaintenanceCommands(BaseCommand):
                                  initial_summary: List[Dict[str, Any]],
                                  table_thresholds: Dict[str, Dict[str, float]],
                                  fallback_threshold_mb: int) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        """Apply adaptive thresholds to filter shards"""
+        """Enrich shards with adaptive threshold information
+
+        Note: --sizeMB (fallback_threshold_mb) is always respected as the minimum threshold.
+        Adaptive thresholds are attached for informational/display purposes only.
+        """
 
         adaptive_shards = []
         adaptive_summary = []
 
-        # Filter individual shards using adaptive thresholds
+        # Enrich shards with adaptive threshold information
         for shard in initial_shards:
             schema = shard['schema_name']
             table = shard['table_name']
@@ -611,13 +615,14 @@ class MaintenanceCommands(BaseCommand):
                 config_mb = fallback_threshold_mb
                 threshold_mb = fallback_threshold_mb
 
-            # Keep shard if it exceeds the adaptive threshold
-            if translog_mb > threshold_mb:
+            # Always keep shard if it exceeds user-specified threshold (--sizeMB)
+            # Adaptive threshold is for display purposes only
+            if translog_mb > fallback_threshold_mb:
                 shard['adaptive_config_mb'] = config_mb
                 shard['adaptive_threshold_mb'] = threshold_mb
                 adaptive_shards.append(shard)
 
-        # Filter summary data - only keep tables that still have problematic shards after adaptive filtering
+        # Build summary data - only keep tables that have problematic shards
         adaptive_table_keys = set()
         for shard in adaptive_shards:
             schema = shard['schema_name']
@@ -647,11 +652,11 @@ class MaintenanceCommands(BaseCommand):
 
     def _display_individual_problematic_shards(self, individual_shards: List[Dict[str, Any]], min_size_mb: int) -> None:
         """Display individual problematic shards for REROUTE CANCEL commands"""
-        self.console.print(f"[bold]Problematic Replica Shards (adaptive thresholds)[/bold]")
+        self.console.print(f"[bold]Problematic Replica Shards (exceeding {min_size_mb}MB threshold)[/bold]")
 
-        # Display threshold information
+        # Display table-specific threshold information
         if individual_shards and any(shard.get('adaptive_threshold_mb') for shard in individual_shards):
-            self.console.print("[dim]Threshold Analysis:[/dim]")
+            self.console.print("[dim]Table-specific flush_threshold_size settings (for reference):[/dim]")
             unique_thresholds = {}
             for shard in individual_shards:
                 schema = shard['schema_name']
@@ -659,7 +664,7 @@ class MaintenanceCommands(BaseCommand):
                 partition = shard.get('partition_values', '')
                 config_mb = shard.get('adaptive_config_mb', min_size_mb)
                 threshold_mb = shard.get('adaptive_threshold_mb', min_size_mb)
-                
+
                 if partition:
                     key = f"{schema}.{table} {partition}"
                 else:
@@ -667,7 +672,7 @@ class MaintenanceCommands(BaseCommand):
                 unique_thresholds[key] = (config_mb, threshold_mb)
 
             for table_key, (config_mb, threshold_mb) in sorted(unique_thresholds.items()):
-                self.console.print(f"[dim]├─ {table_key}: {config_mb:.0f}MB/{threshold_mb:.0f}MB config/threshold[/dim]")
+                self.console.print(f"[dim]├─ {table_key}: {config_mb:.0f}MB config, {threshold_mb:.0f}MB+10% threshold[/dim]")
             self.console.print()
 
         individual_table = Table(box=box.ROUNDED)
@@ -759,23 +764,27 @@ class MaintenanceCommands(BaseCommand):
         self.console.print("[bold]Generated Comprehensive Shard Management Commands:[/bold]")
         self.console.print()
 
-        # Prepare table info with current replica counts
+        # Convert to TableInfo objects and enrich with current replica counts
         valid_table_info = []
         for row in summary_rows:
-            schema_name = row['schema_name']
-            table_name = row['table_name']
-            partition_values = row['partition_values']
-            partition_ident = row['partition_ident']
+            # Convert to TableInfo for type safety
+            table_info = TableInfo.from_dict(row)
 
             # Look up current replica count
-            current_replicas = self._get_current_replica_count(schema_name, table_name, partition_ident, partition_values)
+            current_replicas = self._get_current_replica_count(
+                table_info.schema_name,
+                table_info.table_name,
+                table_info.partition_ident,
+                table_info.partition_values
+            )
 
+            # Skip tables with unknown or zero replicas
             if current_replicas == "unknown" or current_replicas == 0:
                 continue
 
-            # Add current replicas to the row data for later use
-            row['current_replicas'] = current_replicas
-            valid_table_info.append(row)
+            # Update replica count
+            table_info.current_replicas = current_replicas
+            valid_table_info.append(table_info)
 
         # 1. Stop automatic shard rebalancing
         self.console.print("[bold cyan]1. Stop Automatic Shard Rebalancing:[/bold cyan]")
@@ -802,53 +811,48 @@ class MaintenanceCommands(BaseCommand):
         self.console.print()
 
         # Group remaining commands by table/partition for convenience
-        for row in valid_table_info:
-            schema_name = row['schema_name']
-            table_name = row['table_name']
-            partition_values = row['partition_values']
-            partition_ident = row['partition_ident']
-            current_replicas = row['current_replicas']
-
-            table_display = f"{schema_name}.{table_name}"
-            if partition_values and partition_values != 'NULL':
-                table_display += f" PARTITION {partition_values}"
+        for table_info in valid_table_info:
+            # Use TableInfo methods for cleaner code
+            table_display = table_info.get_display_name()
 
             self.console.print(f"[bold green]-- For {table_display}:[/bold green]")
             self.console.print()
 
             # 3. Set replicas to 0
             self.console.print("[dim]3. Set replicas to 0:[/dim]")
-            if partition_values and partition_values != 'NULL':
-                cmd_set_zero = f'ALTER TABLE "{schema_name}"."{table_name}" PARTITION {partition_values} SET ("number_of_replicas" = 0);'
-            else:
-                cmd_set_zero = f'ALTER TABLE "{schema_name}"."{table_name}" SET ("number_of_replicas" = 0);'
+            cmd_set_zero = ReplicaSQLBuilder.build_alter_replicas_sql(
+                table_info.schema_name,
+                table_info.table_name,
+                table_info.partition_values,
+                0
+            )
             self.console.print(cmd_set_zero)
             self.console.print()
 
             # 4. Retention lease monitoring query
             self.console.print("[dim]4. Monitor retention leases:[/dim]")
-            if partition_values and partition_values != 'NULL':
-                retention_query = f"""SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id
-FROM sys.shards
-WHERE table_name = '{table_name}'
-  AND schema_name = '{schema_name}'
-  AND partition_ident = '{partition_ident}'
-ORDER BY array_length(retention_leases['leases'], 1);"""
-            else:
-                retention_query = f"""SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id
-FROM sys.shards
-WHERE table_name = '{table_name}'
-  AND schema_name = '{schema_name}'
-ORDER BY array_length(retention_leases['leases'], 1);"""
+            # Build parameterized query then format for display
+            retention_sql, retention_params = ReplicaSQLBuilder.build_retention_lease_query(
+                table_info.table_name,
+                table_info.schema_name,
+                table_info.partition_ident if table_info.has_partition() else None
+            )
+            # Format for display (safe because it's not executed, just shown to user)
+            retention_query = ReplicaSQLBuilder.format_parameterized_query_for_display(
+                retention_sql,
+                retention_params
+            )
             self.console.print(retention_query)
             self.console.print()
 
             # 5. Restore replicas to original values
             self.console.print("[dim]5. Restore replicas to original value:[/dim]")
-            if partition_values and partition_values != 'NULL':
-                cmd_restore = f'ALTER TABLE "{schema_name}"."{table_name}" PARTITION {partition_values} SET ("number_of_replicas" = {current_replicas});'
-            else:
-                cmd_restore = f'ALTER TABLE "{schema_name}"."{table_name}" SET ("number_of_replicas" = {current_replicas});'
+            cmd_restore = ReplicaSQLBuilder.build_alter_replicas_sql(
+                table_info.schema_name,
+                table_info.table_name,
+                table_info.partition_values,
+                table_info.current_replicas
+            )
             self.console.print(cmd_restore)
             self.console.print()
             self.console.print("[dim]" + "─" * 80 + "[/dim]")  # Visual separator between tables
@@ -960,10 +964,15 @@ ORDER BY array_length(retention_leases['leases'], 1);"""
         """Get the appropriate exit code for autoexec operations"""
         return getattr(self, '_autoexec_exit_code', 1)
 
-    def _get_current_replica_count(self, schema_name: str, table_name: str, partition_ident: Optional[str] = None, partition_values: Optional[str] = None) -> str:
-        """Look up current replica count for table or partition"""
+    def _get_current_replica_count(self, schema_name: str, table_name: str, partition_ident: Optional[str] = None, partition_values: Optional[str] = None) -> Union[int, str]:
+        """Look up current replica count for table or partition
+
+        Returns:
+            int: Replica count if successfully parsed
+            str: "unknown" if lookup fails, or raw value if parsing fails
+        """
         try:
-            if partition_values and partition_values != 'NULL':
+            if partition_values and partition_values != PARTITION_NULL_VALUE:
                 # Partitioned table query
                 replica_query = """
                     SELECT number_of_replicas
@@ -2077,3 +2086,100 @@ class TableResetProcessor:
                             original_replicas=self.original_replicas)
         else:
             console.print(f"[dim]{time.strftime('%H:%M:%S')}[/dim] [red]ERROR[/red] {self.get_table_display_name()}: {message}")
+
+
+class ReplicaSQLBuilder:
+    """Helper class for building replica-related SQL statements
+
+    Provides consistent SQL generation for ALTER TABLE and monitoring queries,
+    eliminating duplication and ensuring security best practices.
+    """
+
+    @staticmethod
+    def validate_identifier(identifier: str) -> None:
+        """Validate SQL identifier to prevent injection"""
+        if not identifier:
+            raise ValueError("Identifier cannot be empty")
+        if '"' in identifier:
+            raise ValueError(f"Identifier contains invalid character: {identifier}")
+
+    @staticmethod
+    def build_alter_replicas_sql(schema_name: str, table_name: str,
+                                 partition_values: Optional[str],
+                                 replica_count: int) -> str:
+        """Build ALTER TABLE SQL for setting replica count safely
+
+        Args:
+            schema_name: Schema name
+            table_name: Table name
+            partition_values: Partition clause (e.g., "(date='2024-01-01')") or None
+            replica_count: Number of replicas to set
+
+        Returns:
+            SQL string with properly quoted identifiers
+
+        Raises:
+            ValueError: If identifiers contain invalid characters
+        """
+        ReplicaSQLBuilder.validate_identifier(schema_name)
+        ReplicaSQLBuilder.validate_identifier(table_name)
+
+        sql = f'ALTER TABLE "{schema_name}"."{table_name}"'
+
+        if partition_values and partition_values != PARTITION_NULL_VALUE:
+            sql += f' PARTITION {partition_values}'
+
+        sql += f' SET ("number_of_replicas" = {replica_count});'
+        return sql
+
+    @staticmethod
+    def build_retention_lease_query(table_name: str, schema_name: str,
+                                    partition_ident: Optional[str] = None) -> tuple[str, List[str]]:
+        """Build parameterized query for checking retention leases
+
+        Args:
+            table_name: Table name
+            schema_name: Schema name
+            partition_ident: Partition identifier (for partitioned tables)
+
+        Returns:
+            Tuple of (sql_query, parameters_list)
+        """
+        if partition_ident:
+            sql = """SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id
+FROM sys.shards
+WHERE table_name = ?
+  AND schema_name = ?
+  AND partition_ident = ?
+ORDER BY array_length(retention_leases['leases'], 1);"""
+            params = [table_name, schema_name, partition_ident]
+        else:
+            sql = """SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id
+FROM sys.shards
+WHERE table_name = ?
+  AND schema_name = ?
+ORDER BY array_length(retention_leases['leases'], 1);"""
+            params = [table_name, schema_name]
+
+        return sql, params
+
+    @staticmethod
+    def format_parameterized_query_for_display(sql: str, params: List[str]) -> str:
+        """Format a parameterized query for display purposes
+
+        Replaces ? placeholders with quoted parameter values for human readability.
+        WARNING: Only use for display, never for execution!
+
+        Args:
+            sql: SQL query with ? placeholders
+            params: List of parameter values
+
+        Returns:
+            Formatted SQL string with parameters substituted
+        """
+        result = sql
+        for param in params:
+            # Escape single quotes in the parameter
+            escaped_param = str(param).replace("'", "''")
+            result = result.replace("?", f"'{escaped_param}'", 1)
+        return result

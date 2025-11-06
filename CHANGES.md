@@ -47,11 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fix: Modified `_filter_tables_by_percentage()` to use actual table-specific adaptive thresholds
   - Impact: AutoExec now respects individual table configurations instead of using one-size-fits-all approach
 
+- **Adaptive threshold override bug**: Fixed --sizeMB parameter being ignored in favor of adaptive thresholds
+  - Issue: User-specified `--sizeMB 50` was ignored, shards filtered using adaptive threshold (563.2MB) instead
+  - Root cause: `_apply_adaptive_thresholds()` compared translog sizes against adaptive threshold, not user's --sizeMB
+  - Fix: Changed filtering to always respect `--sizeMB` as minimum threshold; adaptive thresholds shown for reference only
+  - Impact: `--sizeMB` parameter now works as expected - shows all shards exceeding the specified size
+  - Example: With `--sizeMB 50`, shards at 542MB, 360MB, 301MB now correctly appear (previously: 0 shards shown)
+
 ### Changed
 
 - **Enhanced `problematic-translogs` command**: Adaptive threshold detection based on table settings
   - Default `--sizeMB` changed from 300MB to 512MB (CrateDB default flush threshold)
-  - Adaptive thresholds: Uses table-specific `flush_threshold_size * 1.1` for intelligent detection
+  - Adaptive thresholds: Uses table-specific `flush_threshold_size * 1.1` for informational display (does NOT override --sizeMB)
+  - `--sizeMB` parameter: Always respected as minimum threshold regardless of adaptive thresholds
   - Performance optimized: Only queries table settings for tables with initially problematic shards
   - Enhanced display: Shows both configured value and calculated threshold (e.g., "2048MB/2253MB config/threshold")
   - Partition support: Handles partition-specific flush_threshold_size settings
