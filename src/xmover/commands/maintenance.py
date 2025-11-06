@@ -8,6 +8,8 @@ This module contains commands related to cluster maintenance operations:
 
 import sys
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, List, Dict, Any, Union
 import click
@@ -24,6 +26,113 @@ from ..shard_size_monitor import ShardSizeMonitor
 from ..utils import format_size
 
 console = Console()
+
+
+# ============================================================================
+# Domain Models
+# ============================================================================
+
+# Constants
+PARTITION_NULL_VALUE = 'NULL'
+
+
+@dataclass
+class TableInfo:
+    """Domain model for table/partition information
+
+    Provides type safety and validation for table metadata used in
+    replica reset operations. Replaces untyped Dict[str, Any].
+    """
+    schema_name: str
+    table_name: str
+    partition_values: Optional[str] = None
+    partition_ident: Optional[str] = None
+    current_replicas: int = 0
+    total_primary_shards: int = 1
+    max_translog_uncommitted_mb: float = 0.0
+    adaptive_threshold_mb: float = 563.2  # Default 512MB + 10% buffer
+    adaptive_config_mb: float = 512.0
+
+    def has_partition(self) -> bool:
+        """Check if this represents a partitioned table/partition"""
+        return bool(self.partition_values and self.partition_values != PARTITION_NULL_VALUE)
+
+    def get_display_name(self) -> str:
+        """Get human-readable table name with partition info"""
+        name = f"{self.schema_name}.{self.table_name}"
+        if self.has_partition():
+            name += f" PARTITION {self.partition_values}"
+        return name
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TableInfo':
+        """Create TableInfo from dictionary (for backward compatibility)"""
+        return cls(
+            schema_name=data['schema_name'],
+            table_name=data['table_name'],
+            partition_values=data.get('partition_values'),
+            partition_ident=data.get('partition_ident'),
+            current_replicas=data.get('current_replicas', 0),
+            total_primary_shards=data.get('total_primary_shards', 1),
+            max_translog_uncommitted_mb=data.get('max_translog_uncommitted_mb', 0.0),
+            adaptive_threshold_mb=data.get('adaptive_threshold_mb', 563.2),
+            adaptive_config_mb=data.get('adaptive_config_mb', 512.0),
+        )
+
+
+class QueryResultHelper:
+    """Helper for consistent error handling of CrateDB query results
+
+    CrateDB returns dicts with either:
+    - Success: {'rows': [...], ...} (no 'error' key)
+    - Failure: {'error': 'message', ...} (has 'error' key)
+    """
+
+    @staticmethod
+    def is_success(result: Dict[str, Any]) -> bool:
+        """Check if query succeeded (no error key present)"""
+        return 'error' not in result
+
+    @staticmethod
+    def is_error(result: Dict[str, Any]) -> bool:
+        """Check if query failed (error key present)"""
+        return 'error' in result
+
+    @staticmethod
+    def get_error_message(result: Dict[str, Any]) -> str:
+        """Extract error message from failed query result"""
+        return result.get('error', 'Unknown error')
+
+    @staticmethod
+    def get_rows(result: Dict[str, Any]) -> List[Any]:
+        """Extract rows from query result"""
+        return result.get('rows', [])
+
+
+# ============================================================================
+# Context Managers
+# ============================================================================
+
+@contextmanager
+def json_logging_mode():
+    """Context manager for JSON logging mode
+
+    Temporarily configures loguru for JSON output, then restores original handlers.
+    This prevents global state mutation and ensures proper cleanup.
+    """
+    # Save current handlers for restoration
+    handler_id = logger.add(
+        sys.stderr,
+        format="{time:YYYY-MM-DDTHH:mm:ss.sssZ} | {level} | {message}",
+        serialize=True,  # Enable JSON serialization
+        level="INFO"
+    )
+
+    try:
+        yield
+    finally:
+        # Restore original state by removing our handler
+        logger.remove(handler_id)
 
 
 class MaintenanceCommands(BaseCommand):
@@ -773,38 +882,31 @@ ORDER BY array_length(retention_leases['leases'], 1);"""
             return True
         
         self.console.print(f"[yellow]Processing {len(filtered_tables)} table(s) exceeding {percentage}% threshold[/yellow]")
-        
-        # Setup JSON logging if requested
-        if log_format == "json":
-            # Configure loguru for JSON output
-            logger.remove()  # Remove default handler
-            logger.add(
-                sys.stderr,
-                format="{time:YYYY-MM-DDTHH:mm:ss.sssZ} | {level} | {message}",
-                serialize=True,  # Enable JSON serialization
-                level="INFO"
-            )
-        
+
         success_count = 0
         failure_count = 0
         failed_tables = []
-        
+
         start_time = time.time()
-        
-        # Process each table
-        for table_info in filtered_tables:
-            processor = TableResetProcessor(table_info, self.client, dry_run, max_wait, log_format)
-            
-            table_display = processor.get_table_display_name()
-            self.console.print(f"\n[cyan]Processing: {table_display}[/cyan]")
-            
-            if processor.process():
-                success_count += 1
-                self.console.print(f"[green]✅ {table_display} completed successfully[/green]")
-            else:
-                failure_count += 1
-                failed_tables.append(table_display)
-                self.console.print(f"[red]❌ {table_display} failed[/red]")
+
+        # Use context manager for JSON logging to avoid global state mutation
+        log_context = json_logging_mode() if log_format == "json" else contextmanager(lambda: iter([None]))()
+
+        with log_context:
+            # Process each table
+            for table_info in filtered_tables:
+                processor = TableResetProcessor(table_info, self.client, dry_run, max_wait, log_format)
+
+                table_display = processor.get_table_display_name()
+                self.console.print(f"\n[cyan]Processing: {table_display}[/cyan]")
+
+                if processor.process():
+                    success_count += 1
+                    self.console.print(f"[green]✅ {table_display} completed successfully[/green]")
+                else:
+                    failure_count += 1
+                    failed_tables.append(table_display)
+                    self.console.print(f"[red]❌ {table_display} failed[/red]")
         
         # Summary
         total_time = time.time() - start_time
@@ -1680,25 +1782,31 @@ class TableResetState(Enum):
 
 class TableResetProcessor:
     """State machine processor for individual table replica reset operations"""
-    
-    def __init__(self, table_info: Dict[str, Any], client, dry_run: bool = False, 
-                 max_wait: int = 720, log_format: str = "console"):
-        self.table_info = table_info
+
+    def __init__(self, table_info: Union[Dict[str, Any], TableInfo], client,
+                 dry_run: bool = False, max_wait: int = 720, log_format: str = "console"):
+        # Convert dict to TableInfo if needed (backward compatibility)
+        if isinstance(table_info, dict):
+            self.table_info = TableInfo.from_dict(table_info)
+        else:
+            self.table_info = table_info
+
         self.client = client
         self.dry_run = dry_run
         self.max_wait = max_wait
         self.log_format = log_format
-        
-        self.schema_name = table_info['schema_name']
-        self.table_name = table_info['table_name']
-        self.partition_values = table_info.get('partition_values', '')
-        self.partition_ident = table_info.get('partition_ident', '')
-        self.original_replicas = table_info.get('current_replicas', 0)
-        
+
+        # Extract commonly used fields for convenience
+        self.schema_name = self.table_info.schema_name
+        self.table_name = self.table_info.table_name
+        self.partition_values = self.table_info.partition_values or ''
+        self.partition_ident = self.table_info.partition_ident or ''
+        self.original_replicas = self.table_info.current_replicas
+
         self.state = TableResetState.DETECTED
         self.start_time = None
         self.error_message = None
-        
+
         # Setup logger
         if log_format == "json":
             self.logger = logger
@@ -1707,10 +1815,44 @@ class TableResetProcessor:
         
     def get_table_display_name(self) -> str:
         """Get human-readable table name"""
-        name = f"{self.schema_name}.{self.table_name}"
-        if self.partition_values and self.partition_values != 'NULL':
-            name += f" PARTITION {self.partition_values}"
-        return name
+        return self.table_info.get_display_name()
+
+    def _validate_identifier(self, identifier: str) -> None:
+        """Validate SQL identifier to prevent injection"""
+        if not identifier:
+            raise ValueError("Identifier cannot be empty")
+        # Check for dangerous characters that could break out of quoted identifiers
+        if '"' in identifier:
+            raise ValueError(f"Identifier contains invalid character: {identifier}")
+
+    def _build_alter_replicas_sql(self, replica_count: int) -> str:
+        """Build ALTER TABLE SQL for setting replica count safely
+
+        Args:
+            replica_count: The number of replicas to set
+
+        Returns:
+            SQL string with properly quoted identifiers
+
+        Raises:
+            ValueError: If identifiers contain invalid characters
+        """
+        # Validate identifiers to prevent injection
+        self._validate_identifier(self.schema_name)
+        self._validate_identifier(self.table_name)
+
+        # Build base ALTER TABLE statement with quoted identifiers
+        sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}"'
+
+        # Add partition clause if this is a partitioned table
+        if self.table_info.has_partition():
+            # Partition values are already formatted correctly from the database
+            sql += f' PARTITION {self.partition_values}'
+
+        # Add the SET clause
+        sql += f' SET ("number_of_replicas" = {replica_count});'
+
+        return sql
         
     def process(self) -> bool:
         """Process through all states, returns True if successful"""
@@ -1735,26 +1877,24 @@ class TableResetProcessor:
     def _set_replicas_to_zero(self) -> bool:
         """Set table replicas to 0"""
         self._transition_to_state(TableResetState.SETTING_REPLICAS_ZERO)
-        
+
         try:
-            if self.partition_values and self.partition_values != 'NULL':
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = 0);'
-            else:
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = 0);'
-            
+            sql = self._build_alter_replicas_sql(0)
+
             self._log_info(f"Setting replicas to 0 (original: {self.original_replicas})")
             self._log_info(f"Executing: {sql}")
-            
+
             if not self.dry_run:
                 result = self.client.execute_query(sql)
-                if 'error' in result:
-                    self._handle_failure(f"Failed to set replicas to 0: {result.get('error', 'Unknown error')}")
+                if QueryResultHelper.is_error(result):
+                    error_msg = QueryResultHelper.get_error_message(result)
+                    self._handle_failure(f"Failed to set replicas to 0: {error_msg}")
                     return False
             else:
                 self._log_info(f"DRY RUN: Would execute: {sql}")
-            
+
             return True
-            
+
         except Exception as e:
             self._handle_failure(f"Error setting replicas to 0: {e}")
             return False
@@ -1769,7 +1909,7 @@ class TableResetProcessor:
         for attempt, delay in enumerate(delays, 1):
             if not self.dry_run:
                 lease_count = self._check_retention_leases()
-                expected_count = self.table_info.get('total_primary_shards', 1)
+                expected_count = self.table_info.total_primary_shards
                 
                 if lease_count == expected_count:
                     elapsed = time.time() - start_time
@@ -1799,26 +1939,24 @@ class TableResetProcessor:
     def _restore_replicas(self) -> bool:
         """Restore original replica count"""
         self._transition_to_state(TableResetState.RESTORING_REPLICAS)
-        
+
         try:
-            if self.partition_values and self.partition_values != 'NULL':
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = {self.original_replicas});'
-            else:
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = {self.original_replicas});'
-            
+            sql = self._build_alter_replicas_sql(self.original_replicas)
+
             self._log_info(f"Restoring replicas to {self.original_replicas}")
             self._log_info(f"Executing: {sql}")
-            
+
             if not self.dry_run:
                 result = self.client.execute_query(sql)
-                if 'error' in result:
-                    self._handle_failure(f"CRITICAL: Failed to restore replicas: {result.get('error', 'Unknown error')}")
+                if QueryResultHelper.is_error(result):
+                    error_msg = QueryResultHelper.get_error_message(result)
+                    self._handle_failure(f"CRITICAL: Failed to restore replicas: {error_msg}")
                     return False
             else:
                 self._log_info(f"DRY RUN: Would execute: {sql}")
-            
+
             return True
-            
+
         except Exception as e:
             self._handle_failure(f"CRITICAL: Error restoring replicas: {e}")
             return False
@@ -1826,29 +1964,31 @@ class TableResetProcessor:
     def _check_retention_leases(self) -> int:
         """Check current retention lease count"""
         try:
-            if self.partition_values and self.partition_values != 'NULL':
-                sql = f"""
+            if self.table_info.has_partition():
+                sql = """
                 SELECT array_length(retention_leases['leases'], 1) as cnt_leases
                 FROM sys.shards
-                WHERE table_name = '{self.table_name}'
-                  AND schema_name = '{self.schema_name}'
-                  AND partition_ident = '{self.partition_ident}'
+                WHERE table_name = ?
+                  AND schema_name = ?
+                  AND partition_ident = ?
                 """
+                params = [self.table_name, self.schema_name, self.partition_ident]
             else:
-                sql = f"""
+                sql = """
                 SELECT array_length(retention_leases['leases'], 1) as cnt_leases
                 FROM sys.shards
-                WHERE table_name = '{self.table_name}'
-                  AND schema_name = '{self.schema_name}'
+                WHERE table_name = ?
+                  AND schema_name = ?
                 """
-            
-            result = self.client.execute_query(sql)
-            rows = result.get('rows', [])
+                params = [self.table_name, self.schema_name]
+
+            result = self.client.execute_query(sql, params)
+            rows = QueryResultHelper.get_rows(result)
             if rows:
                 # Return the maximum lease count across all shards
                 return max(row[0] or 0 for row in rows)
             return 0
-            
+
         except Exception as e:
             self._log_error(f"Error checking retention leases: {e}")
             return -1  # Error condition
@@ -1885,34 +2025,36 @@ class TableResetProcessor:
     def _handle_failure(self, error_msg: str) -> None:
         """Handle failure state with rollback attempt"""
         self.error_message = error_msg
+
+        # CRITICAL FIX: Save previous state BEFORE transitioning to FAILED
+        previous_state = self.state
         self._transition_to_state(TableResetState.FAILED)
         self._log_error(error_msg)
-        
+
         # Attempt rollback if we were in monitoring or restoring phase
-        if self.state in [TableResetState.MONITORING_LEASES, TableResetState.RESTORING_REPLICAS]:
+        # Use the saved previous_state instead of self.state (which is now FAILED)
+        if previous_state in [TableResetState.MONITORING_LEASES, TableResetState.RESTORING_REPLICAS]:
             self._attempt_rollback()
-    
+
     def _attempt_rollback(self) -> None:
         """Attempt to rollback by restoring original replica count"""
         if self.dry_run:
             self._log_info("DRY RUN: Would attempt rollback to original replica count")
             return
-            
+
         try:
             self._log_info(f"Attempting rollback: restoring {self.original_replicas} replicas")
-            
-            if self.partition_values and self.partition_values != 'NULL':
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" PARTITION {self.partition_values} SET ("number_of_replicas" = {self.original_replicas});'
-            else:
-                sql = f'ALTER TABLE "{self.schema_name}"."{self.table_name}" SET ("number_of_replicas" = {self.original_replicas});'
-            
+
+            sql = self._build_alter_replicas_sql(self.original_replicas)
+
             self._log_info(f"Rollback executing: {sql}")
             result = self.client.execute_query(sql)
-            if 'error' not in result:
+            if QueryResultHelper.is_success(result):
                 self._log_info("Rollback successful")
             else:
-                self._log_error(f"MANUAL INTERVENTION REQUIRED: Rollback failed - {result.get('error', 'Unknown error')}")
-                
+                error_msg = QueryResultHelper.get_error_message(result)
+                self._log_error(f"MANUAL INTERVENTION REQUIRED: Rollback failed - {error_msg}")
+
         except Exception as e:
             self._log_error(f"MANUAL INTERVENTION REQUIRED: Rollback exception - {e}")
     

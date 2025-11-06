@@ -80,12 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
-- **Comprehensive AutoExec test coverage**: 44 new tests across 3 test modules
-  - `test_autoexec_functionality.py`: 37 unit tests for state machine, dry-run safety, and core logic
-  - `test_autoexec_integration.py`: Integration tests for real-world scenarios
-  - `test_autoexec_cli.py`: CLI parameter validation and usage tests
-  - `test_adaptive_thresholds.py`: 7 tests specifically verifying information_schema threshold lookup
-  - Coverage includes: State transitions, error handling, retry logic, SQL generation, percentage filtering
+- **Comprehensive AutoExec test coverage**: 16 focused tests covering essential business scenarios
+  - `test_autoexec.py`: Consolidated test suite covering replica reset workflows, dry-run safety, adaptive thresholds, CLI validation, and error handling
+  - Test philosophy: Focus on business scenarios rather than implementation details
+  - Coverage includes: Regular and partitioned table resets, timeout handling, dry-run simulation, percentage-based filtering, partial/complete failure scenarios, CLI flag validation
+  - Reduced test complexity by 77.7% (from 1,998 → 445 lines) while maintaining comprehensive coverage
 
 ### Documentation
 
