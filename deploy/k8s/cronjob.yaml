@@ -1,0 +1,106 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: xmover-autoexec
+  labels:
+    app: xmover
+    component: autoexec
+spec:
+  # Run every 4 hours
+  schedule: "0 */4 * * *"
+
+  # Keep last 3 successful jobs and 1 failed job for debugging
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+  # Don't start new job if previous one is still running
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: xmover
+        component: autoexec
+    spec:
+      # Clean up completed pods after 24 hours
+      ttlSecondsAfterFinished: 86400
+
+      template:
+        metadata:
+          labels:
+            app: xmover
+            component: autoexec
+        spec:
+          restartPolicy: Never
+
+          # Security context
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+
+          containers:
+            - name: xmover
+              image: cloud.registry.cr8.net/xmover:v0.0.1
+              imagePullPolicy: Always
+
+              # AutoExec command with dry-run for safety
+              command: ["xmover"]
+              args:
+                - "problematic-translogs"
+                - "--autoexec"
+                - "--dry-run" # Remove this for actual execution
+              # 15 minutes max wait
+
+              # Environment variables
+              env:
+                - name: CRATE_CONNECTION_STRING
+                  valueFrom:
+                    secretKeyRef:
+                      name: xmover-config
+                      key: connection-string
+
+              # Resource limits
+              resources:
+                requests:
+                  memory: "128Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+
+              # Security context for container
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop:
+                    - ALL
+
+              # Temporary storage for logs
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+
+          volumes:
+            - name: tmp
+              emptyDir: {}
+
+          # Image pull secrets for private registry
+          imagePullSecrets:
+            - name: image-pull-cr8cloud
+---
+# Secret template for CrateDB connection
+apiVersion: v1
+kind: Secret
+metadata:
+  name: xmover-config
+
+type: Opaque
+stringData:
+  # Plain text connection string (Kubernetes will automatically base64 encode it)
+  connection-string: "https://system:xxxxxl@xxxx.eks1.us-west-2.aws.cratedb.net:4200/_sql"
+---
+# Note: Using existing imagepull-cr8 secret for registry access
+# The secret should already exist in the cluster for cloud.registry.cr8.net
