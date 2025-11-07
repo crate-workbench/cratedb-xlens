@@ -585,7 +585,7 @@ class MaintenanceCommands(BaseCommand):
         """Enrich shards with adaptive threshold information
 
         Note: --sizeMB (fallback_threshold_mb) is always respected as the minimum threshold.
-        Adaptive thresholds are attached for informational/display purposes only.
+        Tables with higher configured flush_threshold_size will use their higher threshold.
         """
 
         adaptive_shards = []
@@ -615,9 +615,10 @@ class MaintenanceCommands(BaseCommand):
                 config_mb = fallback_threshold_mb
                 threshold_mb = fallback_threshold_mb
 
-            # Always keep shard if it exceeds user-specified threshold (--sizeMB)
-            # Adaptive threshold is for display purposes only
-            if translog_mb > fallback_threshold_mb:
+            # Use the higher of user-specified threshold (--sizeMB) or table-specific threshold
+            # This ensures we respect table configurations while allowing user override
+            effective_threshold = max(fallback_threshold_mb, threshold_mb)
+            if translog_mb > effective_threshold:
                 shard['adaptive_config_mb'] = config_mb
                 shard['adaptive_threshold_mb'] = threshold_mb
                 adaptive_shards.append(shard)
