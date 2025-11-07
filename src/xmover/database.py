@@ -6,6 +6,7 @@ import os
 import json
 import requests
 import warnings
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from dotenv import load_dotenv
@@ -215,46 +216,70 @@ class CrateDBClient:
     
     def __init__(self, connection_string: Optional[str] = None):
         load_dotenv()
-        
+
         self.connection_string = connection_string or os.getenv('CRATE_CONNECTION_STRING')
         if not self.connection_string:
             raise ValueError("CRATE_CONNECTION_STRING not found in environment or provided")
-        
+
         self.username = os.getenv('CRATE_USERNAME')
         self.password = os.getenv('CRATE_PASSWORD')
-        
+
+        # Configurable timeouts for resilience against partial cluster failures
+        # Default timeout for regular queries (30s)
+        self.default_timeout = int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))
+        # Shorter timeout for discovery/health checks (10s) to fail fast
+        self.discovery_timeout = int(os.getenv('CRATE_DISCOVERY_TIMEOUT', '10'))
+        # Maximum number of retries for queries
+        self.max_retries = int(os.getenv('CRATE_MAX_RETRIES', '3'))
+        # Retry delay in seconds (will use exponential backoff)
+        self.retry_delay = float(os.getenv('CRATE_RETRY_DELAY', '1.0'))
+
         # Auto-disable SSL verification for localhost connections
         is_localhost = 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string
         ssl_verify_env = os.getenv('CRATE_SSL_VERIFY', 'true').lower()
-        
+
         # Default to false for localhost, true for remote connections
         if ssl_verify_env == 'auto':
             self.ssl_verify = not is_localhost
         else:
             self.ssl_verify = ssl_verify_env == 'true'
-        
+
         # For localhost, disable SSL verification by default unless explicitly enabled
         if is_localhost and ssl_verify_env == 'true' and os.getenv('CRATE_SSL_VERIFY') is None:
             self.ssl_verify = False
-        
+
         # Suppress SSL warnings when SSL verification is disabled
         if not self.ssl_verify:
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
+
         # Ensure connection string ends with _sql endpoint
         if not self.connection_string.endswith('/_sql'):
             self.connection_string = self.connection_string.rstrip('/') + '/_sql'
     
-    def execute_query(self, query: str, parameters: Optional[List] = None) -> Dict[str, Any]:
-        """Execute a SQL query against CrateDB"""
+    def execute_query(self, query: str, parameters: Optional[List] = None,
+                     timeout: Optional[int] = None, retry: bool = True) -> Dict[str, Any]:
+        """Execute a SQL query against CrateDB with automatic retry on timeout
+
+        Args:
+            query: SQL query to execute
+            parameters: Optional query parameters
+            timeout: Query timeout in seconds (uses default_timeout if None)
+            retry: Whether to retry on timeout/connection errors (default: True)
+
+        Returns:
+            Dict containing query results
+
+        Raises:
+            Exception: On query failure after all retries exhausted
+        """
         payload = {
             'stmt': query
         }
-        
+
         if parameters:
             payload['args'] = parameters
-        
+
         # Handle authentication - only use auth if both username and password are provided
         # For CrateDB, username without password should not use auth
         auth = None
@@ -263,28 +288,77 @@ class CrateDBClient:
         elif self.username and not self.password:
             # For CrateDB 'crate' user without password, don't use auth
             auth = None
-        
-        try:
-            response = requests.post(
-                self.connection_string,
-                json=payload,
-                auth=auth,
-                verify=self.ssl_verify,
-                timeout=30
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.SSLError as e:
-            # Provide helpful SSL error message for localhost connections
-            if 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string:
-                raise Exception(f"SSL certificate error for localhost connection. "
-                              f"Try setting CRATE_SSL_VERIFY=false in your .env file. Error: {e}")
-            else:
-                raise Exception(f"SSL error: {e}")
-        except requests.exceptions.ConnectionError as e:
-            raise Exception(f"Connection error - check if CrateDB is running and accessible: {e}")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to execute query: {e}")
+
+        # Use provided timeout or default
+        base_timeout = timeout if timeout is not None else self.default_timeout
+
+        # Determine if this is a discovery query (quick metadata queries)
+        is_discovery = any(keyword in query.upper() for keyword in [
+            'SYS.NODES', 'SYS.SHARDS', 'INFORMATION_SCHEMA', 'SYS.CLUSTER'
+        ])
+        if is_discovery and timeout is None:
+            base_timeout = self.discovery_timeout
+
+        # Retry logic with exponential backoff AND progressive timeout increase
+        max_attempts = self.max_retries if retry else 1
+        last_exception = None
+
+        for attempt in range(max_attempts):
+            # Progressive timeout: increase timeout on each retry
+            # First attempt: base_timeout
+            # Second attempt: base_timeout * 1.5
+            # Third attempt: base_timeout * 2
+            # Fourth attempt: base_timeout * 2.5, etc.
+            timeout_multiplier = 1.0 + (attempt * 0.5)
+            current_timeout = int(base_timeout * timeout_multiplier)
+
+            try:
+                response = requests.post(
+                    self.connection_string,
+                    json=payload,
+                    auth=auth,
+                    verify=self.ssl_verify,
+                    timeout=current_timeout
+                )
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.SSLError as e:
+                # SSL errors are not retryable
+                if 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string:
+                    raise Exception(f"SSL certificate error for localhost connection. "
+                                  f"Try setting CRATE_SSL_VERIFY=false in your .env file. Error: {e}")
+                else:
+                    raise Exception(f"SSL error: {e}")
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exception = e
+                # These are retryable errors
+                if attempt < max_attempts - 1:
+                    # Exponential backoff delay between retries: 1s, 2s, 4s, etc.
+                    delay = self.retry_delay * (2 ** attempt)
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed
+                    error_type = "Timeout" if isinstance(e, requests.exceptions.Timeout) else "Connection error"
+                    raise Exception(
+                        f"{error_type} after {max_attempts} attempts "
+                        f"(base_timeout={base_timeout}s, final_timeout={current_timeout}s): {e}"
+                    )
+
+            except requests.exceptions.RequestException as e:
+                # Other request exceptions - check if retryable
+                if attempt < max_attempts - 1 and retry:
+                    delay = self.retry_delay * (2 ** attempt)
+                    time.sleep(delay)
+                    last_exception = e
+                    continue
+                else:
+                    raise Exception(f"Failed to execute query: {e}")
+
+        # Should not reach here, but just in case
+        raise Exception(f"Query failed after {max_attempts} attempts: {last_exception}")
     
     def get_nodes_info(self) -> List[NodeInfo]:
         """Get information about all nodes in the cluster with robust error handling"""

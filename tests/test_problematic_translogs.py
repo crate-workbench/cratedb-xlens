@@ -375,7 +375,7 @@ class TestProblematicTranslogs:
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0
-        assert 'Warning: Could not retrieve replica count' in result.output
+        assert 'Warning: Could not determine replica count' in result.output
         assert 'Tables with Problematic Replicas' in result.output
         assert '?' in result.output  # Unknown replica count shown as ?
         assert 'shipmentFormFieldData' in result.output or 'shipme…' in result.output
@@ -481,10 +481,10 @@ class TestProblematicTranslogs:
         partitioned_query = calls[4][0][0]
         assert 'information_schema.table_partitions' in partitioned_query
         assert 'partition_ident' in partitioned_query
-        assert calls[4][0][1] == ['partitioned_table', 'TURVO', 'part123']
+        assert calls[4][0][1] == ['TURVO', 'partitioned_table', 'part123']
 
         # Sixth call should be regular table replica query
         regular_query = calls[5][0][0]
         assert 'information_schema.tables' in regular_query
         assert 'partition_ident' not in regular_query
-        assert calls[5][0][1] == ['regular_table', 'TURVO']
+        assert calls[5][0][1] == ['TURVO', 'regular_table']
