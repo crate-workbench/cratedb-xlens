@@ -54,9 +54,10 @@ def create_maintenance_commands(main_cli):
     @click.option('--percentage', default=200, help='Only process tables exceeding this percentage of threshold (default: 200)')
     @click.option('--max-wait', default=720, help='Maximum seconds to wait for retention leases (default: 720)')
     @click.option('--log-format', type=click.Choice(['console', 'json']), default='console', help='Logging format for container environments')
+    @click.option('--debug', is_flag=True, help='Enable debug mode: log node names and SQL queries for troubleshooting')
     @click.pass_context
     def problematic_translogs(ctx, sizemb: int, execute: bool, autoexec: bool, dry_run: bool,
-                             percentage: int, max_wait: int, log_format: str):
+                             percentage: int, max_wait: int, log_format: str, debug: bool):
         """Find tables with problematic translog sizes and optionally execute automatic replica reset
 
         This command can operate in three modes:
@@ -94,7 +95,7 @@ def create_maintenance_commands(main_cli):
 
         client = ctx.obj['client']
         command = ProblematicTranslogsCommand(client)
-        command.execute(sizemb, execute, autoexec, dry_run, percentage, max_wait, log_format)
+        command.execute(sizemb, execute, autoexec, dry_run, percentage, max_wait, log_format, debug)
 
     @main_cli.command()
     @click.option('--node', required=True, help='Target node to analyze for decommissioning')

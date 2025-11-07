@@ -29,18 +29,26 @@ class DiagnosticsCommands(BaseCommand):
         else:
             raise ValueError(f"Unknown diagnostic command: {command}")
     
-    def test_connection(self, connection_string: Optional[str] = None, verbose: bool = False) -> None:
+    def test_connection(self, connection_string: Optional[str] = None, verbose: bool = False, diagnose: bool = False) -> None:
         """Test connection to CrateDB cluster"""
         try:
             from ..database import CrateDBClient
-            
+
             if connection_string:
                 test_client = CrateDBClient(connection_string)
             else:
                 test_client = self.client
-            
+
             self.print_header("CrateDB Connection Test")
-            
+
+            # If diagnose flag is set, run comprehensive diagnostics
+            if diagnose:
+                self.console.print("[blue]🔍 Running network and load balancer diagnostics...[/blue]")
+                self.console.print("[dim]   (Testing TCP, HTTP, SQL connectivity, node reachability, and LB health)[/dim]\n")
+                diagnostic_results = test_client.diagnose_connection()
+                self._display_diagnostic_results(diagnostic_results)
+                return
+
             if test_client.test_connection():
                 self.console.print("[green]✅ Successfully connected to CrateDB cluster[/green]")
                 
@@ -396,7 +404,260 @@ class DiagnosticsCommands(BaseCommand):
                 
         except Exception as e:
             self.handle_error(e, "performing zone analysis")
-    
+
+    def _display_diagnostic_results(self, results: dict) -> None:
+        """Display comprehensive diagnostic results in a formatted way"""
+        from rich.table import Table
+        from rich import box
+
+        # Extract checks from the nested structure
+        checks = results.get('checks', {})
+        parsed_url = results.get('parsed_url', {})
+        host = parsed_url.get('host', 'Unknown')
+        port = parsed_url.get('port', 'Unknown')
+
+        # Create main diagnostic table
+        diag_table = Table(title="Network & Load Balancer Diagnostics", box=box.ROUNDED, show_header=True)
+        diag_table.add_column("Check", style="cyan", width=30)
+        diag_table.add_column("Status", justify="center", width=12)
+        diag_table.add_column("Details", style="dim")
+
+        # 1. TCP Connectivity
+        tcp_status = checks.get('tcp_connectivity', {})
+        if tcp_status.get('status') == 'OK':
+            latency = tcp_status.get('latency_ms', 'N/A')
+            diag_table.add_row("TCP Connectivity", "[green]✅ OK[/green]", f"Connected to {host}:{port} ({latency}ms)")
+        else:
+            error_msg = tcp_status.get('error', 'Unknown error')
+            diag_table.add_row("TCP Connectivity", "[red]❌ FAIL[/red]", f"Error: {error_msg}")
+
+        # 2. HTTP Endpoint
+        http_status = checks.get('http_endpoint', {})
+        if http_status.get('status') in ['OK', 'WARN']:
+            status_code = http_status.get('status_code', 'N/A')
+            latency = http_status.get('latency_ms', 'N/A')
+            diag_table.add_row("HTTP Endpoint", "[green]✅ OK[/green]", f"Status {status_code} - {latency}ms")
+        else:
+            error_msg = http_status.get('error', 'Unknown error')
+            diag_table.add_row("HTTP Endpoint", "[red]❌ FAIL[/red]", f"Error: {error_msg}")
+
+        # 3. SQL Query Execution
+        sql_status = checks.get('sql_query', {})
+        if sql_status.get('status') == 'OK':
+            auth_used = "Yes" if sql_status.get('auth_used') else "No"
+            latency = sql_status.get('latency_ms', 'N/A')
+            diag_table.add_row("SQL Query Execution", "[green]✅ OK[/green]", f"Auth: {auth_used} - {latency}ms")
+        else:
+            error_msg = sql_status.get('error', 'Unknown error')
+            # Truncate long error messages
+            if len(error_msg) > 50:
+                error_msg = error_msg[:47] + "..."
+            diag_table.add_row("SQL Query Execution", "[red]❌ FAIL[/red]", f"Error: {error_msg}")
+
+        # 4. Node Availability
+        node_status = checks.get('node_availability', {})
+        if node_status.get('status') in ['OK', 'WARN']:
+            total = node_status.get('total_nodes', 0)
+            available = node_status.get('available_nodes', 0)
+            latency = node_status.get('latency_ms', 'N/A')
+            status_color = "green" if node_status.get('status') == 'OK' else "yellow"
+            status_symbol = "✅ OK" if node_status.get('status') == 'OK' else "⚠️ DEGRADED"
+            diag_table.add_row("Node Availability", f"[{status_color}]{status_symbol}[/{status_color}]", f"{available}/{total} nodes - {latency}ms")
+        else:
+            error_msg = node_status.get('error', 'Unknown error')
+            if len(error_msg) > 50:
+                error_msg = error_msg[:47] + "..."
+            diag_table.add_row("Node Availability", "[red]❌ FAIL[/red]", f"Error: {error_msg}")
+
+        # 5. Load Balancer Health
+        lb_status = checks.get('load_balancer_health', {})
+        if lb_status.get('status') in ['OK', 'WARN', 'FAIL']:
+            success = lb_status.get('successful_probes', 0)
+            timeout = lb_status.get('timeout_probes', 0)
+            error = lb_status.get('error_probes', 0)
+            total = lb_status.get('total_probes', 0)
+
+            if lb_status.get('status') == 'OK':
+                lb_color = "green"
+                lb_symbol = "✅ HEALTHY"
+            elif lb_status.get('status') == 'WARN':
+                lb_color = "yellow"
+                lb_symbol = "⚠️ DEGRADED"
+            else:
+                lb_color = "red"
+                lb_symbol = "❌ UNHEALTHY"
+
+            detail_parts = [f"Success: {success}/{total}"]
+            if timeout > 0:
+                detail_parts.append(f"Timeouts: {timeout}")
+            if error > 0:
+                detail_parts.append(f"Errors: {error}")
+
+            diag_table.add_row(
+                "Load Balancer Health",
+                f"[{lb_color}]{lb_symbol}[/{lb_color}]",
+                ", ".join(detail_parts)
+            )
+        else:
+            error_msg = lb_status.get('error', 'Could not perform check')
+            diag_table.add_row("Load Balancer Health", "[yellow]⚠️ SKIP[/yellow]", error_msg)
+
+        # Display the table
+        self.console.print(diag_table)
+
+        # Display Load Balancer probe details if available
+        if lb_status.get('node_routing'):
+            self.console.print()
+            self.console.print("[bold]Load Balancer Routing Details:[/bold]")
+
+            node_routing = lb_status['node_routing']
+            success_probes = 0
+            failed_probes = 0
+            node_counts = {}
+
+            for probe in node_routing:
+                probe_num = probe['probe']
+                status = probe['status']
+
+                if status == 'success':
+                    node_name = probe.get('node_name', 'unknown')
+                    latency = probe.get('latency_ms', 'N/A')
+                    self.console.print(f"  Probe {probe_num}: [green]✓[/green] Routed to [cyan]{node_name}[/cyan] ({latency}ms)")
+                    success_probes += 1
+
+                    # Count nodes for distribution summary
+                    if node_name not in node_counts:
+                        node_counts[node_name] = 0
+                    node_counts[node_name] += 1
+
+                elif status == 'timeout':
+                    self.console.print(f"  Probe {probe_num}: [red]✗[/red] Timeout - {probe.get('error', 'Request timed out')}")
+                    failed_probes += 1
+
+                elif status == '404-error':
+                    error_msg = probe.get('error', '404 error')
+                    detail = probe.get('detail', '')
+                    self.console.print(f"  Probe {probe_num}: [red]✗[/red] {error_msg}")
+                    if detail:
+                        self.console.print(f"              [dim]{detail}[/dim]")
+                    failed_probes += 1
+
+                else:
+                    error_msg = probe.get('error', 'Unknown error')
+                    self.console.print(f"  Probe {probe_num}: [red]✗[/red] Error - {error_msg}")
+                    failed_probes += 1
+
+            # Show distribution summary
+            if node_counts:
+                self.console.print()
+                if len(node_counts) > 1:
+                    self.console.print(f"  [green]✓ Load balancer IS distributing across {len(node_counts)} nodes[/green]")
+                    distribution = ', '.join([f'{name} ({count}x)' for name, count in sorted(node_counts.items())])
+                    self.console.print(f"  [dim]Distribution: {distribution}[/dim]")
+                elif len(node_counts) == 1:
+                    node_name = list(node_counts.keys())[0]
+                    self.console.print(f"  [yellow]⚠ All requests routed to same node: {node_name}[/yellow]")
+                    self.console.print(f"  [dim]This may indicate LB is not using 5-tuple distribution[/dim]")
+
+            # Show failure summary
+            if failed_probes > 0:
+                self.console.print()
+                self.console.print(f"  [red]⚠ {failed_probes}/{len(node_routing)} probes failed - indicates intermittent LB or cluster issues[/red]")
+
+        # Summary section
+        self.console.print()
+
+        # Overall assessment
+        all_passed = (
+            tcp_status.get('status') == 'OK' and
+            http_status.get('status') in ['OK', 'WARN'] and
+            sql_status.get('status') == 'OK' and
+            node_status.get('status') in ['OK', 'WARN']
+        )
+
+        if all_passed:
+            if node_status.get('status') == 'OK':
+                self.console.print("[green]✅ All connectivity checks passed - Network and load balancer are healthy[/green]")
+                self.console.print("[dim]    (This checks network/LB connectivity, not CrateDB cluster health)[/dim]")
+            else:
+                node_avail = node_status.get('available_nodes', 0)
+                total_nodes = node_status.get('total_nodes', 0)
+                self.console.print(f"[yellow]⚠️ Connection successful but some nodes unavailable ({node_avail}/{total_nodes} nodes)[/yellow]")
+                self.console.print("[dim]    (Network/LB are OK, but not all cluster nodes are reachable)[/dim]")
+        else:
+            self.console.print("[red]❌ Network/connectivity diagnostics failed - See details above[/red]")
+            self.console.print("[dim]    (Cannot establish proper connection to the cluster)[/dim]")
+
+        # Detailed recommendations
+        self.console.print("\n[bold]Recommendations:[/bold]")
+        recommendations_shown = False
+
+        if tcp_status.get('status') != 'OK':
+            recommendations_shown = True
+            self.console.print("  • [red]TCP connection failed[/red] - Check network connectivity and firewall rules")
+            self.console.print(f"    Ensure {host}:{port} is accessible from this machine")
+            if tcp_status.get('possible_causes'):
+                for cause in tcp_status['possible_causes'][:2]:  # Show first 2 causes
+                    self.console.print(f"    - {cause}")
+
+        if http_status.get('status') not in ['OK', 'WARN']:
+            recommendations_shown = True
+            self.console.print("  • [red]HTTP endpoint failed[/red] - Check if CrateDB is running and the URL is correct")
+            self.console.print("    Verify CRATE_CONNECTION_STRING in .env file")
+            if http_status.get('recommendation'):
+                self.console.print(f"    💡 {http_status['recommendation']}")
+
+        if sql_status.get('status') != 'OK':
+            recommendations_shown = True
+            error_msg = sql_status.get('error', '')
+            if 'timeout' in error_msg.lower():
+                self.console.print("  • [red]SQL queries timing out[/red] - Cluster may be under heavy load or degraded")
+                self.console.print("    Consider increasing CRATE_QUERY_TIMEOUT or CRATE_DISCOVERY_TIMEOUT in .env")
+            elif '401' in error_msg or 'Unauthorized' in error_msg:
+                self.console.print("  • [red]Authentication failed[/red] - Check CRATE_USERNAME and CRATE_PASSWORD in .env")
+                auth_info = sql_status.get('auth_configured', {})
+                self.console.print(f"    Current: username={auth_info.get('username', 'Not set')}, password={'Set' if auth_info.get('password') != 'Not set' else 'Not set'}")
+            else:
+                self.console.print(f"  • [red]SQL execution failed[/red] - {error_msg}")
+
+        if node_status.get('status') == 'WARN':
+            recommendations_shown = True
+            node_avail = node_status.get('available_nodes', 0)
+            total_nodes = node_status.get('total_nodes', 0)
+            missing = total_nodes - node_avail
+            self.console.print(f"  • [yellow]{missing} node(s) unavailable[/yellow] - Check cluster health and node status")
+            if node_status.get('warning'):
+                self.console.print(f"    {node_status['warning']}")
+
+        lb_success = lb_status.get('successful_probes', 0)
+        lb_timeout = lb_status.get('timeout_probes', 0)
+        lb_total = lb_status.get('total_probes', 0)
+
+        if lb_total > 0 and lb_timeout > 0:
+            recommendations_shown = True
+            self.console.print(f"  • [yellow]Load balancer showing timeouts ({lb_timeout}/{lb_total} probes)[/yellow]")
+            self.console.print("    This suggests an AWS LB issue or cluster is severely degraded")
+            self.console.print("    Recommendation: Increase CRATE_MAX_RETRIES and CRATE_DISCOVERY_TIMEOUT")
+            self.console.print(f"                    Example: CRATE_MAX_RETRIES=7, CRATE_DISCOVERY_TIMEOUT=30")
+
+        if lb_total > 0 and lb_success < lb_total / 2:
+            recommendations_shown = True
+            self.console.print("  • [red]Load balancer is unhealthy[/red] - More than half of health probes failed")
+            self.console.print("    This is likely an AWS Load Balancer issue or severe cluster degradation")
+            self.console.print("    Check AWS LB health checks and target group status")
+
+        if not recommendations_shown:
+            self.console.print("  • [green]No connectivity issues detected[/green] - Network and load balancer are working properly")
+
+        # Add note about checking actual cluster health
+        self.console.print()
+        self.console.print("[bold]Next Steps:[/bold]")
+        self.console.print("  • To check actual CrateDB cluster health (RED/YELLOW/GREEN), run: [cyan]xmover test-connection[/cyan]")
+        self.console.print("  • Cluster health reflects shard allocation, replication status, and data integrity")
+
+        # Configuration suggestions
+        self.console.print("\n[dim]💡 For detailed retry/timeout configuration, see docs/connection-resilience.md[/dim]")
+
     def _explain_already_allocated_error(self) -> None:
         """Explain already allocated shard error"""
         panel_content = """[bold red]Shard Already Allocated Error[/bold red]
@@ -557,12 +818,27 @@ def create_diagnostics_commands(main_group):
     @main_group.command()
     @click.option('--connection-string', help='Override connection string from .env')
     @click.option('--verbose', '-v', is_flag=True, help='Show detailed node information including resource usage')
+    @click.option('--diagnose', '-d', is_flag=True, help='Run comprehensive connection diagnostics (TCP, HTTP, SQL, nodes, load balancer)')
     @click.pass_context
-    def test_connection(ctx, connection_string: Optional[str], verbose: bool):
-        """Test connection to CrateDB cluster"""
+    def test_connection(ctx, connection_string: Optional[str], verbose: bool, diagnose: bool):
+        """Test connection to CrateDB cluster
+
+        Use --diagnose to run comprehensive diagnostics including:
+        - TCP connectivity test
+        - HTTP endpoint availability
+        - SQL query execution with authentication
+        - Node availability check
+        - Load balancer health probes
+
+        This helps identify whether timeout issues are caused by:
+        - Network connectivity problems
+        - AWS Load Balancer issues
+        - Cluster node failures
+        - Authentication problems
+        """
         client = ctx.obj['client']
         cmd = DiagnosticsCommands(client)
-        cmd.test_connection(connection_string, verbose)
+        cmd.test_connection(connection_string, verbose, diagnose)
     
     @main_group.command()
     @click.argument('error_message', required=False)

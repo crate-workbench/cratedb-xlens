@@ -992,23 +992,18 @@ class MonitoringCommands(BaseCommand):
         self.console.print()
     
     def _discover_largest_tables(self) -> List[Dict[str, Any]]:
-        """Discover the 5 largest tables/partitions with enhanced query"""
+        """Discover the 5 largest tables/partitions with simplified query (no JOIN for performance)"""
         discovery_query = """
         SELECT
-            s.schema_name,
-            s.table_name,
-            s.partition_ident,
-            tp.values AS partition_values,
-            ROUND(SUM(s.size) / 1024 / 1024 / 1024, 2) AS size_gb,
-            SUM(s.num_docs) AS total_docs
-        FROM sys.shards s
-        LEFT JOIN information_schema.table_partitions tp
-            ON s.schema_name = tp.table_schema
-            AND s.table_name = tp.table_name
-            AND s.partition_ident = tp.partition_ident
-        WHERE s.primary = true
-        GROUP BY s.schema_name, s.table_name, s.partition_ident, tp.values
-        ORDER BY size_gb DESC 
+            schema_name,
+            table_name,
+            partition_ident,
+            ROUND(SUM(size) / 1024 / 1024 / 1024, 2) AS size_gb,
+            SUM(num_docs) AS total_docs
+        FROM sys.shards
+        WHERE "primary" = true
+        GROUP BY schema_name, table_name, partition_ident
+        ORDER BY size_gb DESC
         LIMIT 5
         """
         
@@ -1016,23 +1011,34 @@ class MonitoringCommands(BaseCommand):
             # Fresh connection for discovery
             fresh_client = self._create_fresh_client()
             result = fresh_client.execute_query(discovery_query)
-            
+
+            # Check if result contains an error
+            if 'error' in result:
+                logger.error(f"🔍 Discovery query returned error: {result['error']}")
+                if 'error_trace' in result:
+                    logger.error(f"   Error trace: {result['error_trace']}")
+                return []
+
             tables = []
             for row in result.get('rows', []):
-                schema, table, partition_ident, partition_values, size_gb, total_docs = row
+                schema, table, partition_ident, size_gb, total_docs = row
                 tables.append({
                     'schema_name': schema,
                     'table_name': table,
                     'partition_ident': partition_ident,
-                    'partition_values': partition_values,
+                    'partition_values': None,  # Not queried for performance reasons
                     'size_gb': float(size_gb) if size_gb else 0.0,
                     'total_docs': int(total_docs) if total_docs else 0
                 })
-            
+
+            logger.info(f"🔍 Discovery found {len(tables)} tables")
             return tables
-            
+
         except Exception as e:
+            import traceback
             logger.error(f"🔍 Discovery failed: {e}")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.debug(f"   Full traceback: {traceback.format_exc()}")
             return []
     
     def _sample_table_data(self, table_info: Dict, table_data: Dict, performance_metrics: Dict, 

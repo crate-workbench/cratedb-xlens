@@ -30,10 +30,11 @@ class ProblematicTranslogsCommand(BaseCommand):
         self.display = ProblematicTranslogsDisplay(self.console)
         self.sql_generator = ProblematicTranslogsSQLGenerator(client, self.console)
         self.autoexec_handler = AutoExecHandler(client, self.console)
+        self.debug = False  # Will be set by execute() method
 
     def execute(self, sizemb: int, generate_sql: bool, autoexec: bool = False,
                              dry_run: bool = False, percentage: int = 200,
-                             max_wait: int = 720, log_format: str = "console") -> None:
+                             max_wait: int = 720, log_format: str = "console", debug: bool = False) -> None:
         """Find tables with problematic translog sizes and optionally execute automatic replica reset
 
         This command identifies tables with replica shards that have large uncommitted translog sizes
@@ -61,6 +62,12 @@ class ProblematicTranslogsCommand(BaseCommand):
         """
         if not self.validate_connection():
             return
+
+        # Enable debug mode on the client if requested
+        self.debug = debug
+        self.client.debug = debug
+        if debug:
+            self.console.print("[yellow]🐛 DEBUG MODE ENABLED - Will log node names and SQL queries[/yellow]")
 
         self.console.print(Panel.fit(f"[bold blue]Problematic Translog Analysis[/bold blue]"))
         self.console.print(f"[dim]Using adaptive thresholds based on table flush_threshold_size settings (≥ {sizemb} MB baseline)[/dim]")
@@ -432,7 +439,7 @@ class ProblematicTranslogsCommand(BaseCommand):
             if partition_ident and partition_ident != 'NULL':
                 # Query for partition-specific replica count
                 query = """
-                    SELECT settings['table']['number_of_replicas']
+                    SELECT number_of_replicas
                     FROM information_schema.table_partitions
                     WHERE table_schema = ?
                       AND table_name = ?
@@ -442,7 +449,7 @@ class ProblematicTranslogsCommand(BaseCommand):
             else:
                 # Query for table-level replica count
                 query = """
-                    SELECT settings['table']['number_of_replicas']
+                    SELECT number_of_replicas
                     FROM information_schema.tables
                     WHERE table_schema = ?
                       AND table_name = ?
@@ -474,5 +481,17 @@ class ProblematicTranslogsCommand(BaseCommand):
                 return str(replica_value)
 
         except Exception as e:
-            self.console.print(f"[yellow]Warning: Could not determine replica count for {schema_name}.{table_name}: {e}[/yellow]")
-            return "unknown"
+            error_msg = str(e)
+
+            # Provide more specific guidance based on error type
+            if '404' in error_msg:
+                self.console.print(f"[red]Warning: SQL endpoint returned 404 for {schema_name}.{table_name}[/red]")
+                self.console.print(f"[dim]  This indicates severe cluster degradation - AWS LB may be routing to dead nodes[/dim]")
+                self.console.print(f"[dim]  Run 'xmover test-connection --diagnose' to check load balancer health[/dim]")
+            elif 'timeout' in error_msg.lower():
+                self.console.print(f"[yellow]Warning: Timeout querying replica count for {schema_name}.{table_name}[/yellow]")
+                self.console.print(f"[dim]  Cluster is slow - consider increasing CRATE_DISCOVERY_TIMEOUT[/dim]")
+            else:
+                self.console.print(f"[yellow]Warning: Could not determine replica count for {schema_name}.{table_name}: {e}[/yellow]")
+
+            return "?"
