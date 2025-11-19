@@ -3,12 +3,17 @@ Database connection and query functions for CrateDB
 """
 
 import os
+import sys
 import json
 import requests
 import warnings
+import time
+import logging
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -215,46 +220,94 @@ class CrateDBClient:
     
     def __init__(self, connection_string: Optional[str] = None):
         load_dotenv()
-        
+
         self.connection_string = connection_string or os.getenv('CRATE_CONNECTION_STRING')
         if not self.connection_string:
             raise ValueError("CRATE_CONNECTION_STRING not found in environment or provided")
-        
-        self.username = os.getenv('CRATE_USERNAME')
-        self.password = os.getenv('CRATE_PASSWORD')
-        
+
+        # Extract credentials from URL if present (format: https://user:pass@host:port)
+        # This is more reliable than embedding credentials in the URL
+        import urllib.parse
+        parsed = urllib.parse.urlparse(self.connection_string)
+
+        if parsed.username and parsed.password:
+            # Extract credentials from URL
+            self.username = parsed.username
+            self.password = parsed.password
+            # Rebuild URL without credentials
+            self.connection_string = urllib.parse.urlunparse((
+                parsed.scheme,
+                f"{parsed.hostname}:{parsed.port}" if parsed.port else parsed.hostname,
+                parsed.path,
+                parsed.params,
+                parsed.query,
+                parsed.fragment
+            ))
+            logger.info(f"Extracted credentials from URL, using auth parameter instead")
+        else:
+            # Use credentials from environment variables
+            self.username = os.getenv('CRATE_USERNAME')
+            self.password = os.getenv('CRATE_PASSWORD')
+
+        # Debug mode flag - when enabled, logs node names and queries
+        self.debug = False
+
+        # Configurable timeouts for resilience against partial cluster failures
+        # Default timeout for regular queries (30s)
+        self.default_timeout = int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))
+        # Shorter timeout for discovery/health checks (10s) to fail fast
+        self.discovery_timeout = int(os.getenv('CRATE_DISCOVERY_TIMEOUT', '10'))
+        # Maximum number of retries for queries
+        self.max_retries = int(os.getenv('CRATE_MAX_RETRIES', '3'))
+        # Retry delay in seconds (will use exponential backoff)
+        self.retry_delay = float(os.getenv('CRATE_RETRY_DELAY', '1.0'))
+
         # Auto-disable SSL verification for localhost connections
         is_localhost = 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string
         ssl_verify_env = os.getenv('CRATE_SSL_VERIFY', 'true').lower()
-        
+
         # Default to false for localhost, true for remote connections
         if ssl_verify_env == 'auto':
             self.ssl_verify = not is_localhost
         else:
             self.ssl_verify = ssl_verify_env == 'true'
-        
+
         # For localhost, disable SSL verification by default unless explicitly enabled
         if is_localhost and ssl_verify_env == 'true' and os.getenv('CRATE_SSL_VERIFY') is None:
             self.ssl_verify = False
-        
+
         # Suppress SSL warnings when SSL verification is disabled
         if not self.ssl_verify:
             import urllib3
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
+
         # Ensure connection string ends with _sql endpoint
         if not self.connection_string.endswith('/_sql'):
             self.connection_string = self.connection_string.rstrip('/') + '/_sql'
     
-    def execute_query(self, query: str, parameters: Optional[List] = None) -> Dict[str, Any]:
-        """Execute a SQL query against CrateDB"""
+    def execute_query(self, query: str, parameters: Optional[List] = None,
+                     timeout: Optional[int] = None, retry: bool = True) -> Dict[str, Any]:
+        """Execute a SQL query against CrateDB with automatic retry on timeout
+
+        Args:
+            query: SQL query to execute
+            parameters: Optional query parameters
+            timeout: Query timeout in seconds (uses default_timeout if None)
+            retry: Whether to retry on timeout/connection errors (default: True)
+
+        Returns:
+            Dict containing query results
+
+        Raises:
+            Exception: On query failure after all retries exhausted
+        """
         payload = {
             'stmt': query
         }
-        
+
         if parameters:
             payload['args'] = parameters
-        
+
         # Handle authentication - only use auth if both username and password are provided
         # For CrateDB, username without password should not use auth
         auth = None
@@ -263,28 +316,101 @@ class CrateDBClient:
         elif self.username and not self.password:
             # For CrateDB 'crate' user without password, don't use auth
             auth = None
-        
-        try:
-            response = requests.post(
-                self.connection_string,
-                json=payload,
-                auth=auth,
-                verify=self.ssl_verify,
-                timeout=30
-            )
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.SSLError as e:
-            # Provide helpful SSL error message for localhost connections
-            if 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string:
-                raise Exception(f"SSL certificate error for localhost connection. "
-                              f"Try setting CRATE_SSL_VERIFY=false in your .env file. Error: {e}")
-            else:
-                raise Exception(f"SSL error: {e}")
-        except requests.exceptions.ConnectionError as e:
-            raise Exception(f"Connection error - check if CrateDB is running and accessible: {e}")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to execute query: {e}")
+
+        # Use provided timeout or default
+        base_timeout = timeout if timeout is not None else self.default_timeout
+
+        # Determine if this is a discovery query (quick metadata queries)
+        is_discovery = any(keyword in query.upper() for keyword in [
+            'SYS.NODES', 'SYS.SHARDS', 'INFORMATION_SCHEMA', 'SYS.CLUSTER'
+        ])
+        if is_discovery and timeout is None:
+            base_timeout = self.discovery_timeout
+            logger.info(f"🔍 Discovery query detected, using discovery_timeout={base_timeout}s")
+        elif is_discovery and timeout is not None:
+            logger.info(f"⚠️ Discovery query but explicit timeout provided: {timeout}s (discovery_timeout={self.discovery_timeout}s ignored)")
+
+        # Debug mode: Log node name and query before execution
+        if self.debug:
+            try:
+                # Get node name by querying root endpoint
+                base_url = self.connection_string.replace('/_sql', '')
+                response = requests.get(base_url, auth=auth, verify=self.ssl_verify, timeout=2)
+                node_data = response.json()
+                node_name = node_data.get('name', 'unknown')
+
+                # Log query details - print to stderr so it doesn't interfere with JSON output
+                query_preview = query[:150] + '...' if len(query) > 150 else query
+                query_preview = ' '.join(query_preview.split())  # Collapse whitespace
+                print(f"🐛 [DEBUG] Node: {node_name} | Query: {query_preview}", file=sys.stderr)
+                if parameters:
+                    print(f"🐛 [DEBUG] Parameters: {parameters}", file=sys.stderr)
+            except Exception as e:
+                print(f"🐛 [DEBUG] Could not fetch node name: {e}", file=sys.stderr)
+
+        # Retry logic with exponential backoff AND progressive timeout increase
+        max_attempts = self.max_retries if retry else 1
+        last_exception = None
+
+        for attempt in range(max_attempts):
+            # Progressive timeout: increase timeout on each retry
+            # First attempt: base_timeout
+            # Second attempt: base_timeout * 1.5
+            # Third attempt: base_timeout * 2
+            # Fourth attempt: base_timeout * 2.5, etc.
+            timeout_multiplier = 1.0 + (attempt * 0.5)
+            current_timeout = int(base_timeout * timeout_multiplier)
+
+            if attempt > 0:  # Log retries
+                logger.debug(f"Retry attempt {attempt+1}/{max_attempts} with timeout={current_timeout}s (base={base_timeout}s, multiplier={timeout_multiplier:.1f}x)")
+
+            try:
+                response = requests.post(
+                    self.connection_string,
+                    json=payload,
+                    auth=auth,
+                    verify=self.ssl_verify,
+                    timeout=current_timeout
+                )
+                response.raise_for_status()
+                return response.json()
+
+            except requests.exceptions.SSLError as e:
+                # SSL errors are not retryable
+                if 'localhost' in self.connection_string or '127.0.0.1' in self.connection_string:
+                    raise Exception(f"SSL certificate error for localhost connection. "
+                                  f"Try setting CRATE_SSL_VERIFY=false in your .env file. Error: {e}")
+                else:
+                    raise Exception(f"SSL error: {e}")
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                last_exception = e
+                # These are retryable errors
+                if attempt < max_attempts - 1:
+                    # Exponential backoff delay between retries: 1s, 2s, 4s, etc.
+                    delay = self.retry_delay * (2 ** attempt)
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Final attempt failed
+                    error_type = "Timeout" if isinstance(e, requests.exceptions.Timeout) else "Connection error"
+                    raise Exception(
+                        f"{error_type} after {max_attempts} attempts "
+                        f"(base_timeout={base_timeout}s, final_timeout={current_timeout}s): {e}"
+                    )
+
+            except requests.exceptions.RequestException as e:
+                # Other request exceptions - check if retryable
+                if attempt < max_attempts - 1 and retry:
+                    delay = self.retry_delay * (2 ** attempt)
+                    time.sleep(delay)
+                    last_exception = e
+                    continue
+                else:
+                    raise Exception(f"Failed to execute query: {e}")
+
+        # Should not reach here, but just in case
+        raise Exception(f"Query failed after {max_attempts} attempts: {last_exception}")
     
     def get_nodes_info(self) -> List[NodeInfo]:
         """Get information about all nodes in the cluster with robust error handling"""
@@ -563,6 +689,310 @@ class CrateDBClient:
             # Log the actual error for debugging
             print(f"Connection test failed: {e}")
             return False
+
+    def diagnose_connection(self) -> Dict[str, Any]:
+        """Comprehensive connection diagnostics for troubleshooting
+
+        Returns detailed information about:
+        - TCP connectivity
+        - HTTP endpoint availability
+        - Authentication status
+        - SSL configuration
+        - Node availability
+        - Load balancer health
+        - Network latency
+        """
+        import socket
+        import urllib.parse
+        from datetime import datetime
+
+        diagnosis = {
+            'timestamp': datetime.utcnow().isoformat(),
+            'connection_string': self.connection_string,
+            'checks': {}
+        }
+
+        # Parse connection URL
+        try:
+            parsed = urllib.parse.urlparse(self.connection_string)
+            host = parsed.hostname
+            port = parsed.port or 4200
+            scheme = parsed.scheme
+            diagnosis['parsed_url'] = {
+                'host': host,
+                'port': port,
+                'scheme': scheme
+            }
+        except Exception as e:
+            diagnosis['checks']['url_parse'] = {
+                'status': 'FAIL',
+                'error': f"Failed to parse connection string: {e}"
+            }
+            return diagnosis
+
+        # 1. TCP Connectivity Check
+        try:
+            start = time.time()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((host, port))
+            latency_ms = (time.time() - start) * 1000
+            sock.close()
+
+            if result == 0:
+                diagnosis['checks']['tcp_connectivity'] = {
+                    'status': 'OK',
+                    'latency_ms': round(latency_ms, 2),
+                    'message': f"TCP connection to {host}:{port} successful"
+                }
+            else:
+                diagnosis['checks']['tcp_connectivity'] = {
+                    'status': 'FAIL',
+                    'error': f"Cannot establish TCP connection to {host}:{port}",
+                    'error_code': result,
+                    'possible_causes': [
+                        "Firewall blocking connection",
+                        "CrateDB not running",
+                        "Incorrect host/port",
+                        "Network routing issue"
+                    ]
+                }
+                return diagnosis
+        except socket.gaierror as e:
+            diagnosis['checks']['tcp_connectivity'] = {
+                'status': 'FAIL',
+                'error': f"DNS resolution failed for {host}: {e}",
+                'possible_causes': [
+                    "Hostname does not exist",
+                    "DNS server unreachable",
+                    "Network configuration issue"
+                ]
+            }
+            return diagnosis
+        except Exception as e:
+            diagnosis['checks']['tcp_connectivity'] = {
+                'status': 'FAIL',
+                'error': f"TCP connectivity check failed: {e}"
+            }
+            return diagnosis
+
+        # 2. HTTP Endpoint Check (without auth)
+        try:
+            start = time.time()
+            response = requests.get(
+                self.connection_string.replace('/_sql', ''),
+                verify=self.ssl_verify,
+                timeout=5,
+                allow_redirects=False
+            )
+            latency_ms = (time.time() - start) * 1000
+
+            diagnosis['checks']['http_endpoint'] = {
+                'status': 'OK' if response.status_code < 500 else 'WARN',
+                'status_code': response.status_code,
+                'latency_ms': round(latency_ms, 2),
+                'message': f"HTTP endpoint responding (status: {response.status_code})"
+            }
+        except requests.exceptions.SSLError as e:
+            diagnosis['checks']['http_endpoint'] = {
+                'status': 'FAIL',
+                'error': f"SSL error: {e}",
+                'ssl_verify': self.ssl_verify,
+                'recommendation': "Try setting CRATE_SSL_VERIFY=false in .env for localhost/self-signed certs"
+            }
+            return diagnosis
+        except requests.exceptions.Timeout as e:
+            diagnosis['checks']['http_endpoint'] = {
+                'status': 'FAIL',
+                'error': f"HTTP request timed out after 5s: {e}",
+                'possible_causes': [
+                    "Load balancer not routing requests",
+                    "CrateDB hung/unresponsive",
+                    "Network congestion"
+                ]
+            }
+            return diagnosis
+        except Exception as e:
+            diagnosis['checks']['http_endpoint'] = {
+                'status': 'FAIL',
+                'error': f"HTTP endpoint check failed: {e}"
+            }
+            return diagnosis
+
+        # 3. SQL Endpoint with Auth Check
+        try:
+            start = time.time()
+            result = self.execute_query("SELECT 1", retry=False, timeout=5)
+            latency_ms = (time.time() - start) * 1000
+
+            diagnosis['checks']['sql_query'] = {
+                'status': 'OK',
+                'latency_ms': round(latency_ms, 2),
+                'message': "SQL query executed successfully",
+                'auth_used': bool(self.username and self.password)
+            }
+        except Exception as e:
+            error_str = str(e)
+            diagnosis['checks']['sql_query'] = {
+                'status': 'FAIL',
+                'error': error_str,
+                'auth_configured': {
+                    'username': self.username or 'Not set',
+                    'password': '***' if self.password else 'Not set'
+                }
+            }
+
+            # Provide specific guidance based on error
+            if '401' in error_str or 'Unauthorized' in error_str:
+                diagnosis['checks']['sql_query']['possible_causes'] = [
+                    "Invalid credentials",
+                    "Password required but not provided",
+                    "User does not exist"
+                ]
+            elif 'timeout' in error_str.lower():
+                diagnosis['checks']['sql_query']['possible_causes'] = [
+                    "Cluster overloaded",
+                    "Query routing to unavailable node",
+                    "Load balancer issue"
+                ]
+
+            return diagnosis
+
+        # 4. Node Availability Check
+        try:
+            start = time.time()
+            result = self.execute_query(
+                "SELECT COUNT(*) as total, COUNT(CASE WHEN name IS NOT NULL THEN 1 END) as available FROM sys.nodes",
+                retry=False,
+                timeout=10
+            )
+            latency_ms = (time.time() - start) * 1000
+
+            if result.get('rows'):
+                total, available = result['rows'][0]
+                diagnosis['checks']['node_availability'] = {
+                    'status': 'OK' if available == total else 'WARN',
+                    'total_nodes': total,
+                    'available_nodes': available,
+                    'unavailable_nodes': total - available,
+                    'latency_ms': round(latency_ms, 2)
+                }
+
+                if available < total:
+                    diagnosis['checks']['node_availability']['warning'] = \
+                        f"{total - available} node(s) unavailable - queries may be routed to degraded nodes"
+        except Exception as e:
+            diagnosis['checks']['node_availability'] = {
+                'status': 'FAIL',
+                'error': f"Cannot query node status: {e}",
+                'possible_causes': [
+                    "Metadata queries timing out (sys.nodes unavailable)",
+                    "Cluster in degraded state",
+                    "Load balancer routing issues"
+                ]
+            }
+
+        # 5. Load Balancer Health Indicator
+        # Check for consistent timeouts which suggest LB issues
+        # Also track which nodes handle each request by querying root endpoint
+        timeout_count = 0
+        success_count = 0
+        error_count = 0
+        node_routing = []
+
+        try:
+            # Get base URL (without /_sql)
+            base_url = self.connection_string.replace('/_sql', '')
+            auth = None
+            if self.username and self.password:
+                auth = (self.username, self.password)
+
+            for i in range(3):
+                try:
+                    # GET request to root endpoint returns node information
+                    # This is more reliable than SQL queries for LB testing
+                    start = time.time()
+                    response = requests.get(
+                        base_url,
+                        auth=auth,
+                        verify=self.ssl_verify,
+                        timeout=3
+                    )
+                    latency_ms = (time.time() - start) * 1000
+
+                    response.raise_for_status()
+                    data = response.json()
+                    node_name = data.get('name', 'unknown')
+                    node_id = data.get('id', 'unknown')
+
+                    success_count += 1
+                    node_routing.append({
+                        'probe': i + 1,
+                        'status': 'success',
+                        'node_name': node_name,
+                        'node_id': node_id[:8] if node_id != 'unknown' else 'unknown',
+                        'latency_ms': round(latency_ms, 2)
+                    })
+
+                except requests.exceptions.Timeout as e:
+                    timeout_count += 1
+                    node_routing.append({
+                        'probe': i + 1,
+                        'status': 'timeout',
+                        'error': 'Request timed out'
+                    })
+
+                except requests.exceptions.RequestException as e:
+                    error_msg = str(e)
+                    error_count += 1
+
+                    if '404' in error_msg:
+                        node_routing.append({
+                            'probe': i + 1,
+                            'status': '404-error',
+                            'error': '404 on root endpoint',
+                            'detail': 'LB routing to dead/unhealthy node'
+                        })
+                    else:
+                        node_routing.append({
+                            'probe': i + 1,
+                            'status': 'error',
+                            'error': error_msg[:80]
+                        })
+
+                except Exception as e:
+                    error_count += 1
+                    node_routing.append({
+                        'probe': i + 1,
+                        'status': 'error',
+                        'error': str(e)[:80]
+                    })
+
+                time.sleep(0.5)
+
+            diagnosis['checks']['load_balancer_health'] = {
+                'status': 'OK' if success_count == 3 else ('WARN' if success_count > 0 else 'FAIL'),
+                'successful_probes': success_count,
+                'timeout_probes': timeout_count,
+                'error_probes': error_count,
+                'total_probes': 3,
+                'message': f"{success_count}/3 quick probes succeeded",
+                'node_routing': node_routing  # Include node routing information
+            }
+
+            if timeout_count > 0 or error_count > 0:
+                diagnosis['checks']['load_balancer_health']['possible_causes'] = [
+                    "AWS ELB/ALB routing to unhealthy targets",
+                    "Some cluster nodes unresponsive",
+                    "Inconsistent query routing"
+                ]
+        except Exception as e:
+            diagnosis['checks']['load_balancer_health'] = {
+                'status': 'ERROR',
+                'error': f"Load balancer health check failed: {e}"
+            }
+
+        return diagnosis
     
     def get_cluster_watermarks(self) -> Dict[str, Any]:
         """Get cluster disk watermark settings"""
