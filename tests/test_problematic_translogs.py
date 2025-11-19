@@ -21,14 +21,14 @@ class TestProblematicTranslogs:
         """Test that tables with high flush_threshold_size are not incorrectly flagged"""
         # Shard with 518.9MB translog but table has 2048MB flush threshold
         individual_shards_data = [
-            ['TURVO', 'orderFormFieldData', None, 10, 'data-hot-7', 518.9]
+            ['ACME', 'orders', None, 10, 'data-hot-7', 518.9]
         ]
         summary_data = [
-            ['TURVO', 'orderFormFieldData', None, None, 1, 518.9, 3, 6, 8.2, 16.3]
+            ['ACME', 'orders', None, None, 1, 518.9, 3, 6, 8.2, 16.3]
         ]
         # Flush threshold query returns 2048MB (2147483648 bytes) for this table
         flush_threshold_data = [
-            ['TURVO', 'orderFormFieldData', 2147483648]  # 2048 MB in bytes
+            ['ACME', 'orders', 2147483648]  # 2048 MB in bytes
         ]
 
         self.mock_client.execute_query.side_effect = [
@@ -61,18 +61,18 @@ class TestProblematicTranslogs:
         """Test ALTER command generation for non-partitioned tables"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8],
-            ['TURVO', 'orderFormFieldData', None, 5, 'data-hot-1', 600.5]  # Increased to exceed 512MB
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8],
+            ['ACME', 'orders', None, 5, 'data-hot-1', 600.5]  # Increased to exceed 512MB
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 3, 7011.8, 5, 5, 12.4, 12.1],
-            ['TURVO', 'orderFormFieldData', None, None, 1, 600.5, 3, 6, 8.2, 16.3]
+            ['ACME', 'shipments', None, None, 3, 7011.8, 5, 5, 12.4, 12.1],
+            ['ACME', 'orders', None, None, 1, 600.5, 3, 6, 8.2, 16.3]
         ]
         # Flush threshold query - both tables use default 512MB
         flush_threshold_data = [
-            ['TURVO', 'orderFormFieldData', 536870912],  # 512 MB default
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'orders', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
 
         # Set up mock call sequence - includes flush threshold and replica count queries
@@ -80,10 +80,10 @@ class TestProblematicTranslogs:
             {'rows': individual_shards_data},  # Individual shards query
             {'rows': summary_data},            # Summary query
             {'rows': flush_threshold_data},    # Flush threshold query
-            {'rows': [['1']]},                 # Replica count for shipmentFormFieldData (for display)
-            {'rows': [['2']]},                 # Replica count for orderFormFieldData (for display)
-            {'rows': [['1']]},                 # Replica count for shipmentFormFieldData (for command gen)
-            {'rows': [['2']]},                 # Replica count for orderFormFieldData (for command gen)
+            {'rows': [['1']]},                 # Replica count for shipments (for display)
+            {'rows': [['2']]},                 # Replica count for orders (for display)
+            {'rows': [['1']]},                 # Replica count for shipments (for command gen)
+            {'rows': [['2']]},                 # Replica count for orders (for command gen)
         ]
         self.mock_client.test_connection.return_value = True
 
@@ -98,25 +98,25 @@ class TestProblematicTranslogs:
 
         # Check that REROUTE CANCEL commands are present
         assert 'REROUTE CANCEL' in result.output
-        assert 'ALTER TABLE "TURVO"."shipmentFormFieldData"' in result.output
-        assert 'ALTER TABLE "TURVO"."orderFormFieldData"' in result.output
+        assert 'ALTER TABLE "ACME"."shipments"' in result.output
+        assert 'ALTER TABLE "ACME"."orders"' in result.output
 
     def test_partitioned_table_command_generation(self):
         """Test ALTER command generation for partitioned tables"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 3, 'data-hot-2', 600.0],
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 3, 'data-hot-2', 600.0],
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 'partition123', 2, 600.0, 2, 2, 1.1, 1.0],
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 'partition123', 2, 600.0, 2, 2, 1.1, 1.0],
         ]
         # Flush threshold queries - table level then partition level (4 columns)
         table_flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData_events', 536870912],  # 512 MB default
+            ['ACME', 'shipments_events', 536870912],  # 512 MB default
         ]
         partition_flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 536870912],  # 4 columns for partitions
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 536870912],  # 4 columns for partitions
         ]
 
         # Set up mock call sequence
@@ -138,7 +138,7 @@ class TestProblematicTranslogs:
         assert '1. Stop Automatic Shard Rebalancing:' in result.output
 
         # Check that partitioned table commands are present
-        assert 'ALTER TABLE "TURVO"."shipmentFormFieldData_events"' in result.output
+        assert 'ALTER TABLE "ACME"."shipments_events"' in result.output
         assert 'REROUTE CANCEL' in result.output
         assert '("sync_day"=1757376000000)' in result.output
 
@@ -146,24 +146,24 @@ class TestProblematicTranslogs:
         """Test handling of both partitioned and non-partitioned tables"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8],
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 3, 'data-hot-2', 600.0],
-            ['TURVO', 'orderFormFieldData', None, 5, 'data-hot-1', 650.5]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8],
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 3, 'data-hot-2', 600.0],
+            ['ACME', 'orders', None, 5, 'data-hot-1', 650.5]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 2, 7011.8, 5, 5, 12.4, 12.1],
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 'partition123', 1, 600.0, 2, 2, 1.1, 1.0],
-            ['TURVO', 'orderFormFieldData', None, None, 1, 650.5, 3, 6, 8.2, 16.3]
+            ['ACME', 'shipments', None, None, 2, 7011.8, 5, 5, 12.4, 12.1],
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 'partition123', 1, 600.0, 2, 2, 1.1, 1.0],
+            ['ACME', 'orders', None, None, 1, 650.5, 3, 6, 8.2, 16.3]
         ]
         # Flush threshold queries - table level then partition level
         table_flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
-            ['TURVO', 'orderFormFieldData', 536870912],  # 512 MB default
-            ['TURVO', 'shipmentFormFieldData_events', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
+            ['ACME', 'orders', 536870912],  # 512 MB default
+            ['ACME', 'shipments_events', 536870912],  # 512 MB default
         ]
         partition_flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData_events', '("sync_day"=1757376000000)', 536870912],  # 4 columns for partitions
+            ['ACME', 'shipments_events', '("sync_day"=1757376000000)', 536870912],  # 4 columns for partitions
         ]
 
         self.mock_client.execute_query.side_effect = [
@@ -171,9 +171,9 @@ class TestProblematicTranslogs:
             {'rows': summary_data},            # Summary query
             {'rows': table_flush_threshold_data},    # Table flush threshold query
             {'rows': partition_flush_threshold_data},  # Partition flush threshold query
-            {'rows': [['2']]},                 # Replica count for shipmentFormFieldData
+            {'rows': [['2']]},                 # Replica count for shipments
             {'rows': [['1']]},                 # Replica count for partitioned table
-            {'rows': [['3']]},                 # Replica count for orderFormFieldData
+            {'rows': [['3']]},                 # Replica count for orders
         ]
         self.mock_client.test_connection.return_value = True
 
@@ -185,11 +185,11 @@ class TestProblematicTranslogs:
 
         # Check that the table summary is displayed correctly
         assert 'Tables with Problematic Replicas' in result.output
-        assert 'shipmentForm…' in result.output or 'shipmentFormFieldData' in result.output
-        assert 'orderF…' in result.output or 'orderFormFieldData' in result.output
-        assert '7011.8' in result.output  # Max translog MB for shipmentFormFieldData
+        assert 'shipments' in result.output or 'shipments' in result.output
+        assert 'orders' in result.output or 'orders' in result.output
+        assert '7011.8' in result.output  # Max translog MB for shipments
         assert '600.0' in result.output   # Max translog MB for partitioned table
-        assert '650.5' in result.output   # Max translog MB for orderFormFieldData
+        assert '650.5' in result.output   # Max translog MB for orders
 
         # Check hint about --execute flag
         assert '--execute flag to generate comprehensive shard management commands' in result.output
@@ -218,14 +218,14 @@ class TestProblematicTranslogs:
         """Test --execute flag generates commands for display"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -250,14 +250,14 @@ class TestProblematicTranslogs:
         """Test --execute flag generates comprehensive commands"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -286,14 +286,14 @@ class TestProblematicTranslogs:
         """Test --execute flag displays all comprehensive commands"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -324,14 +324,14 @@ class TestProblematicTranslogs:
         """Test that execute flag works correctly when replica counts are available"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -354,14 +354,14 @@ class TestProblematicTranslogs:
         """Test handling tables with unknown replica counts"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -378,20 +378,20 @@ class TestProblematicTranslogs:
         assert 'Warning: Could not determine replica count' in result.output
         assert 'Tables with Problematic Replicas' in result.output
         assert '?' in result.output  # Unknown replica count shown as ?
-        assert 'shipmentFormFieldData' in result.output or 'shipme…' in result.output
+        assert 'shipments' in result.output or 'shipme…' in result.output
 
     def test_skip_tables_with_zero_replicas(self):
         """Test handling tables that already have 0 replicas"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'shipmentFormFieldData', None, 14, 'data-hot-6', 7011.8]
+            ['ACME', 'shipments', None, 14, 'data-hot-6', 7011.8]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'shipmentFormFieldData', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
+            ['ACME', 'shipments', None, None, 1, 7011.8, 5, 5, 12.4, 12.1]
         ]
         flush_threshold_data = [
-            ['TURVO', 'shipmentFormFieldData', 536870912],  # 512 MB default
+            ['ACME', 'shipments', 536870912],  # 512 MB default
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -407,7 +407,7 @@ class TestProblematicTranslogs:
         assert result.exit_code == 0
         assert 'Tables with Problematic Replicas' in result.output
         assert '0' in result.output  # Zero replica count shown in table
-        assert 'shipmentFormFieldData' in result.output or 'shipme…' in result.output
+        assert 'shipments' in result.output or 'shipme…' in result.output
 
     def test_database_error_handling(self):
         """Test handling of database connection errors"""
@@ -441,20 +441,20 @@ class TestProblematicTranslogs:
         """Test that correct replica queries are used for partitioned vs non-partitioned tables"""
         # Individual shards data (6 columns)
         individual_shards_data = [
-            ['TURVO', 'partitioned_table', '("id"=123)', 14, 'data-hot-6', 650.0],
-            ['TURVO', 'regular_table', None, 5, 'data-hot-1', 600.0]
+            ['ACME', 'partitioned_table', '("id"=123)', 14, 'data-hot-6', 650.0],
+            ['ACME', 'regular_table', None, 5, 'data-hot-1', 600.0]
         ]
         # Summary data (10 columns from query, displayed as 8 by combining P/R columns)
         summary_data = [
-            ['TURVO', 'partitioned_table', '("id"=123)', 'part123', 1, 650.0, 3, 3, 5.5, 5.2],
-            ['TURVO', 'regular_table', None, None, 1, 600.0, 2, 4, 3.1, 6.2]
+            ['ACME', 'partitioned_table', '("id"=123)', 'part123', 1, 650.0, 3, 3, 5.5, 5.2],
+            ['ACME', 'regular_table', None, None, 1, 600.0, 2, 4, 3.1, 6.2]
         ]
         table_flush_threshold_data = [
-            ['TURVO', 'regular_table', 536870912],  # 512 MB default
-            ['TURVO', 'partitioned_table', 536870912],  # 512 MB default
+            ['ACME', 'regular_table', 536870912],  # 512 MB default
+            ['ACME', 'partitioned_table', 536870912],  # 512 MB default
         ]
         partition_flush_threshold_data = [
-            ['TURVO', 'partitioned_table', '("id"=123)', 536870912],  # 4 columns for partitions
+            ['ACME', 'partitioned_table', '("id"=123)', 536870912],  # 4 columns for partitions
         ]
         self.mock_client.execute_query.side_effect = [
             {'rows': individual_shards_data},  # Individual shards query
@@ -481,10 +481,10 @@ class TestProblematicTranslogs:
         partitioned_query = calls[4][0][0]
         assert 'information_schema.table_partitions' in partitioned_query
         assert 'partition_ident' in partitioned_query
-        assert calls[4][0][1] == ['TURVO', 'partitioned_table', 'part123']
+        assert calls[4][0][1] == ['ACME', 'partitioned_table', 'part123']
 
         # Sixth call should be regular table replica query
         regular_query = calls[5][0][0]
         assert 'information_schema.tables' in regular_query
         assert 'partition_ident' not in regular_query
-        assert calls[5][0][1] == ['TURVO', 'regular_table']
+        assert calls[5][0][1] == ['ACME', 'regular_table']
