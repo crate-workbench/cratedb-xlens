@@ -180,9 +180,9 @@ xmover analyze --table events --largest 3
 ╭─────────────────────────────────┬─────────────────────────────┬────────┬───────┬──────────┬──────────┬──────────┬────────────╮
 │ Table                           │ Partition                   │ Shards │  P/R  │ Min Size │ Avg Size │ Max Size │ Total Size │
 ├─────────────────────────────────┼─────────────────────────────┼────────┼───────┼──────────┼──────────┼──────────┼────────────┤
-│ TURVO.shipmentFormFieldData     │ ("id_ts_month"=162777600000 │      4 │ 2P/2R │   89.1GB │   95.3GB │  104.2GB │    381.2GB │
-│ TURVO.orderFormFieldData        │ N/A                         │      6 │ 3P/3R │   23.4GB │   28.7GB │   35.1GB │    172.2GB │
-│ TURVO.documentUploadProgress    │ ("sync_day"=1635724800000)  │      8 │ 4P/4R │   15.2GB │   18.4GB │   22.1GB │    147.2GB │
+│ ACME.shipments                  │ ("id_ts_month"=162777600000 │      4 │ 2P/2R │   89.1GB │   95.3GB │  104.2GB │    381.2GB │
+│ ACME.orders                     │ N/A                         │      6 │ 3P/3R │   23.4GB │   28.7GB │   35.1GB │    172.2GB │
+│ ACME.document_progress          │ ("sync_day"=1635724800000)  │      8 │ 4P/4R │   15.2GB │   18.4GB │   22.1GB │    147.2GB │
 ╰─────────────────────────────────┴─────────────────────────────┴────────┴───────┴──────────┴──────────┴──────────┴────────────╯
 
 📊 Summary: 18 total shards using 700.6GB across 3 largest table/partition(s)
@@ -197,11 +197,11 @@ xmover analyze --table events --largest 3
 ╭─────────────────────────────────┬─────────────────────────────┬────────┬───────┬──────────┬──────────┬──────────┬────────────╮
 │ Table                           │ Partition                   │ Shards │  P/R  │ Min Size │ Avg Size │ Max Size │ Total Size │
 ├─────────────────────────────────┼─────────────────────────────┼────────┼───────┼──────────┼──────────┼──────────┼────────────┤
-│ TURVO.emailActivity_transformf… │ N/A                         │      2 │ 1P/1R │    0.001GB │   0.001GB │    0.002GB │      0.002GB │
-│ TURVO.calendarFormFieldData_tr… │ ("sync_day"=1627776000000)  │      2 │ 1P/1R │    0.005GB │   0.005GB │    0.005GB │      0.010GB │
-│ TURVO.shipmentSummary_failures  │ N/A                         │      2 │ 1P/1R │    0.100GB │   0.100GB │    0.100GB │      0.200GB │
-│ TURVO.documentActivity_failures │ N/A                         │      4 │ 2P/2R │    0.250GB │   0.325GB │    0.400GB │      1.300GB │
-│ TURVO.userActivity_logs         │ ("date"=2024-01-01)         │      6 │ 3P/3R │    0.800GB │   0.950GB │    1.100GB │      5.700GB │
+│ ACME.email_activitiy            │ N/A                         │      2 │ 1P/1R │  0.001GB │  0.001GB │  0.002GB │    0.002GB │
+│ ACME.calendar                   │ ("sync_day"=1627776000000)  │      2 │ 1P/1R │  0.005GB │  0.005GB │  0.005GB │    0.010GB │
+│ ACME.shipments                  │ N/A                         │      2 │ 1P/1R │  0.100GB │  0.100GB │  0.100GB │    0.200GB │
+│ ACME.documents                  │ N/A                         │      4 │ 2P/2R │  0.250GB │  0.325GB │  0.400GB │    1.300GB │
+│ ACME.user_activity              │ ("date"=2024-01-01)         │      6 │ 3P/3R │  0.800GB │  0.950GB │  1.100GB │    5.700GB │
 ╰─────────────────────────────────┴─────────────────────────────┴────────┴───────┴──────────┴──────────┴──────────┴────────────╯
 
 📊 Summary: 16 total shards using 7.212GB across 5 smallest non-zero table/partition(s)
@@ -412,7 +412,7 @@ xmover monitor-recovery --watch --include-transitioning
 The recovery monitor now displays detailed translog information in the format:
 
 ```
-📋 TURVO.shipmentFormFieldData_events S4 PEER TRANSLOG 0.0% 6.2GB (TL:109.8GB / 22.1GB / 20%) data-hot-0 → data-hot-7
+📋 ACME.shipments_events S4 PEER TRANSLOG 0.0% 6.2GB (TL:109.8GB / 22.1GB / 20%) data-hot-0 → data-hot-7
 ```
 
 **Translog Display Format**: `TL:X.XGB / Y.YGB / ZZ%`
@@ -433,7 +433,7 @@ Translog information is only shown when significant (uncommitted ≥ 10MB or tot
 For replica shard recoveries, the monitor now shows sequence number-based progress when available:
 
 ```
-📋 TURVO.LINEAGE_DIRECTLY_OPEN_TO_APPOINTMENT S2R PEER TRANSLOG 99.9% (seq) 15.2GB data-hot-0 → data-hot-1
+📋 ACME.LINEAGE S2R PEER TRANSLOG 99.9% (seq) 15.2GB data-hot-0 → data-hot-1
 ```
 
 **Progress Display Formats:**
@@ -454,9 +454,9 @@ The monitor now shows detailed information for transitioning recoveries instead 
 
 ```
 16:08:20 | 5 done (transitioning)
-         | 🔄 TURVO.accountFormFieldData S7R PEER DONE 99.8% (seq) 3.8GB data-hot-5 → data-hot-7
-         | 🔄 TURVO_MySQL.composite_mapping S11P PEER DONE 100.0% 3.0GB data-hot-5 → data-hot-6
-         | 🔄 TURVO.shipmentFormFieldData ("id_ts_month"=1633046400000) S6R PEER DONE 99.8% (seq) 8.2GB (TL:233MB / 49MB / 21%) data-hot-4 → data-hot-7
+         | 🔄 ACME.accounts S7R PEER DONE 99.8% (seq) 3.8GB data-hot-5 → data-hot-7
+         | 🔄 ACME_MySQL.mapping S11P PEER DONE 100.0% 3.0GB data-hot-5 → data-hot-6
+         | 🔄 ACME.shipments ("id_ts_month"=1633046400000) S6R PEER DONE 99.8% (seq) 8.2GB (TL:233MB / 49MB / 21%) data-hot-4 → data-hot-7
 ```
 
 **Transitioning Display Features:**
@@ -511,15 +511,15 @@ xmover problematic-translogs --autoexec --percentage 300 --log-format json
 ```
 Problematic Replica Shards (adaptive thresholds)
 Threshold Analysis:
-├─ TURVO.shipmentFormFieldData: 2048MB/2253MB config/threshold
-├─ TURVO.orderFormFieldData: 512MB/563MB config/threshold
+├─ ACME.shipments: 2048MB/2253MB config/threshold
+├─ ACME.orders: 512MB/563MB config/threshold
 
 ╭────────┬──────────────────────┬────────────────────────────┬──────────┬────────────┬─────────────┬──────────────╮
 │ Schema │ Table                │ Partition                  │ Shard ID │ Node       │ Translog MB │ Threshold MB │
 ├────────┼──────────────────────┼────────────────────────────┼──────────┼────────────┼─────────────┼──────────────┤
-│ TURVO  │ shipmentFormFieldData│ none                       │       14 │ data-hot-6 │      7040.9 │         2253 │
-│ TURVO  │ shipmentFormFieldData│ ("sync_day"=1757376000000) │        3 │ data-hot-2 │       481.2 │         2253 │
-│ TURVO  │ orderFormFieldData   │ none                       │        5 │ data-hot-1 │       469.5 │          563 │
+│ ACME   │ shipments            │ none                       │       14 │ data-hot-6 │      7040.9 │         2253 │
+│ ACME   │ shipments            │ ("sync_day"=1757376000000) │        3 │ data-hot-2 │       481.2 │         2253 │
+│ ACME   │ orders               │ none                       │        5 │ data-hot-1 │       469.5 │          563 │
 ╰────────┴──────────────────────┴────────────────────────────┴──────────┴────────────┴─────────────┴──────────────╯
 
 Found 2 table/partition(s) with problematic translogs:
@@ -529,25 +529,25 @@ Found 2 table/partition(s) with problematic translogs:
 │ Schema │ Table     │ Partition │ Problema… │ Max      │ Shards      │ Size GB      │ Current  │
 │        │           │           │ Replicas  │ Trans.MB │ (P/R)       │ (P/R)        │ Replicas │
 ├────────┼───────────┼───────────┼───────────┼──────────┼─────────────┼──────────────┼──────────┤
-│ TURVO  │ shipment… │ ("sync..  │         2 │   7011.8 │ 5P/5R       │ 12.4/12.1    │        1 │
-│ TURVO  │ orderFor… │ none      │         1 │    469.5 │ 3P/6R       │ 8.2/16.3     │        2 │
+│ ACME   │ shipments │ ("sync..  │         2 │   7011.8 │ 5P/5R       │ 12.4/12.1    │        1 │
+│ ACME   │ orders    │ none      │         1 │    469.5 │ 3P/6R       │ 8.2/16.3     │        2 │
 ╰────────┴───────────┴───────────┴───────────┴──────────┴─────────────┴──────────────┴──────────╯
 
 Generated ALTER Commands:
 
-ALTER TABLE "TURVO"."shipmentFormFieldData" REROUTE CANCEL SHARD 14 on 'data-hot-6' WITH (allow_primary=False);
-ALTER TABLE "TURVO"."shipmentFormFieldData_events" PARTITION ("sync_day"=1757376000000) REROUTE CANCEL SHARD 3 on 'data-hot-2' WITH (allow_primary=False);
-ALTER TABLE "TURVO"."orderFormFieldData" REROUTE CANCEL SHARD 5 on 'data-hot-1' WITH (allow_primary=False);
+ALTER TABLE "ACME"."shipments" REROUTE CANCEL SHARD 14 on 'data-hot-6' WITH (allow_primary=False);
+ALTER TABLE "ACME"."shipments_events" PARTITION ("sync_day"=1757376000000) REROUTE CANCEL SHARD 3 on 'data-hot-2' WITH (allow_primary=False);
+ALTER TABLE "ACME"."orders" REROUTE CANCEL SHARD 5 on 'data-hot-1' WITH (allow_primary=False);
 
 -- Set replicas to 0:
-ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 0);
+ALTER TABLE "ACME"."shipments" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 0);
 -- Restore replicas to 1:
-ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 1);
+ALTER TABLE "ACME"."shipments" PARTITION ("id_ts_month"=1756684800000) SET ("number_of_replicas" = 1);
 
 -- Set replicas to 0:
-ALTER TABLE "TURVO"."orderFormFieldData" SET ("number_of_replicas" = 0);
+ALTER TABLE "ACME"."orders" SET ("number_of_replicas" = 0);
 -- Restore replicas to 2:
-ALTER TABLE "TURVO"."orderFormFieldData" SET ("number_of_replicas" = 2);
+ALTER TABLE "ACME"."orders" SET ("number_of_replicas" = 2);
 
 Total: 3 REROUTE CANCEL commands + 4 replica management commands
 ```
@@ -632,7 +632,7 @@ Total checkpoint activity: 190,314 changes, Average rate: 2,109.0/sec
    Rank | Schema.Table           | Shard | Partition      | Node       | Type | Checkpoint Δ | Rate/sec | Trend
    -----------------------------------------------------------------------------------------------------------
    1    | gc.scheduled_jobs_log  | 0     | -              | data-hot-8 | P    | 113,744      | 3,791.5  | 🔥 HOT
-   2    | TURVO.events           | 0     | 04732dpl6osj8d | data-hot-0 | P    | 45,837       | 1,527.9  | 🔥 HOT
+   2    | ACME.events            | 0     | 04732dpl6osj8d | data-hot-0 | P    | 45,837       | 1,527.9  | 🔥 HOT
    3    | doc.user_actions       | 1     | 04732dpk70rj6d | data-hot-2 | P    | 30,733       | 1,024.4  | 🔥 HOT
 
 Legend:
@@ -656,7 +656,7 @@ Total checkpoint activity: 190,314 changes, Average rate: 2,109.0/sec
    Rank | Schema.Table           | Shard | Partition      | Node       | Type | Checkpoint Δ | Rate/sec | Trend
    -----------------------------------------------------------------------------------------------------------
    1    | gc.scheduled_jobs_log  | 0     | -              | data-hot-8 | P    | 113,744      | 3,791.5  | 🔥 HOT
-   2    | TURVO.events           | 0     | 04732dpl6osj8d | data-hot-0 | P    | 45,837       | 1,527.9  | 🔥 HOT
+   2    | ACME.events            | 0     | 04732dpl6osj8d | data-hot-0 | P    | 45,837       | 1,527.9  | 🔥 HOT
    3    | doc.user_actions       | 1     | 04732dpk70rj6d | data-hot-2 | P    | 30,733       | 1,024.4  | 🔥 HOT
 
 ━━━ Next update in 30s ━━━
@@ -743,9 +743,9 @@ Large Translogs (>400MB) - 09:45:51
 ╭────────────────────────────┬──────────────────────┬───────┬────────────┬────────┬──────╮
 │ Schema.Table               │ Partition            │ Shard │ Node       │  TL MB │ Type │
 ├────────────────────────────┼──────────────────────┼───────┼────────────┼────────┼──────┤
-│ TURVO.orderFormFieldData_… │ ("sync_day"=175936.… │     7 │ data-hot-7 │    510 │  P   │
-│ TURVO.orderFormFieldData   │ -                    │     8 │ data-hot-6 │    509 │  R   │
-│ TURVO.orderFormFieldData   │ -                    │    20 │ data-hot-3 │    507 │  R   │
+│ ACME.orders                │ ("sync_day"=175936.… │     7 │ data-hot-7 │    510 │  P   │
+│ ACME.orders                │ -                    │     8 │ data-hot-6 │    509 │  R   │
+│ ACME.orders                │ -                    │    20 │ data-hot-3 │    507 │  R   │
 ╰────────────────────────────┴──────────────────────┴───────┴────────────┴────────┴──────╯
 3 shards (1P/2R) - Avg translog: 509MB
 ```
@@ -845,7 +845,7 @@ xmover monitor-recovery --watch
 
 ```bash
 # Monitor specific table
-xmover monitor-recovery --table shipmentFormFieldData --watch
+xmover monitor-recovery --table shipments --watch
 
 # Monitor specific node
 xmover monitor-recovery --node data-hot-4 --watch

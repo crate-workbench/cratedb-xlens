@@ -111,8 +111,8 @@ class TestPartitionBugFixes:
         
         # Test partitioned table - should include PARTITION clause
         partitioned_rec = MoveRecommendation(
-            table_name="shipmentFormFieldData",
-            schema_name="TURVO",
+            table_name="shipments",
+            schema_name="ACME",
             shard_id=4,
             from_node="data-hot-6",
             to_node="data-hot-5",
@@ -126,7 +126,7 @@ class TestPartitionBugFixes:
         )
         
         sql = partitioned_rec.to_sql()
-        expected = 'ALTER TABLE "TURVO"."shipmentFormFieldData" PARTITION ("id_ts_month"=1754006400000) REROUTE MOVE SHARD 4 FROM \'data-hot-6\' TO \'data-hot-5\';'
+        expected = 'ALTER TABLE "ACME"."shipments" PARTITION ("id_ts_month"=1754006400000) REROUTE MOVE SHARD 4 FROM \'data-hot-6\' TO \'data-hot-5\';'
         assert sql == expected, f"Expected: {expected}, Got: {sql}"
         
         # Test non-partitioned table - should NOT include PARTITION clause

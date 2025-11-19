@@ -386,9 +386,9 @@ class TestActiveShardMonitor:
         # Create snapshots with same table/shard but different partitions
         snapshot1 = [
             # Partition 1
-            self.create_test_snapshot("TURVO", "appointmentFormFieldData_events", 0, "data-hot-8", True, 32684, 100.0),
+            self.create_test_snapshot("ACME", "appointment_events", 0, "data-hot-8", True, 32684, 100.0),
             # Partition 2 (same table/shard/node/type but different partition)
-            self.create_test_snapshot("TURVO", "appointmentFormFieldData_events", 0, "data-hot-8", True, 54289, 100.0),
+            self.create_test_snapshot("ACME", "appointment_events", 0, "data-hot-8", True, 54289, 100.0),
         ]
         
         # Modify partition_ident for the snapshots to simulate different partitions
@@ -397,9 +397,9 @@ class TestActiveShardMonitor:
         
         snapshot2 = [
             # Partition 1 progresses  
-            self.create_test_snapshot("TURVO", "appointmentFormFieldData_events", 0, "data-hot-8", True, 32800, 130.0),  # +116 delta
+            self.create_test_snapshot("ACME", "appointment_events", 0, "data-hot-8", True, 32800, 130.0),  # +116 delta
             # Partition 2 progresses
-            self.create_test_snapshot("TURVO", "appointmentFormFieldData_events", 0, "data-hot-8", True, 54400, 130.0),  # +111 delta
+            self.create_test_snapshot("ACME", "appointment_events", 0, "data-hot-8", True, 54400, 130.0),  # +111 delta
         ]
         
         # Set partition_ident for second snapshot

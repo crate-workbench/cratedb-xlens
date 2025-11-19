@@ -327,7 +327,7 @@ SELECT
 
 ```sql
 partition-id / values from information_schema table by using a join
-ALTER TABLE "TURVO"."shipmentFormFieldData" REROUTE CANCEL SHARD 11 on 'data-hot-8' WITH (allow_primary=False);
+ALTER TABLE "ACME"."shipments" REROUTE CANCEL SHARD 11 on 'data-hot-8' WITH (allow_primary=False);
 ```
 
 ```sql
@@ -354,16 +354,16 @@ SELECT
 +-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
 | schema_name | table_name                   | partition_values           | shard_id | node['name'] | translog_uncommitted_mb |
 +-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
-| TURVO       | shipmentFormFieldData        | NULL                       |       14 | data-hot-6   |     7011.800104141235   |
-| TURVO       | shipmentFormFieldData        | NULL                       |       27 | data-hot-7   |     5131.491161346436   |
-| TURVO       | shipmentFormFieldData        | NULL                       |        0 | data-hot-9   |     2460.8706073760986  |
-| TURVO       | shipmentFormFieldData        | NULL                       |        7 | data-hot-2   |     1501.8993682861328  |
-| TURVO       | shipmentFormFieldData        | NULL                       |       10 | data-hot-5   |      504.0952272415161  |
-| TURVO       | shipmentFormFieldData        | NULL                       |       29 | data-hot-3   |      501.0663766860962  |
-| TURVO       | shipmentFormFieldData        | NULL                       |       16 | data-hot-8   |      497.5628480911255  |
-| TURVO       | shipmentFormFieldData_events | ("sync_day"=1757376000000) |        3 | data-hot-2   |      481.20221996307373 |
-| TURVO       | shipmentFormFieldData_events | ("sync_day"=1757376000000) |        4 | data-hot-4   |      473.12464427948    |
-| TURVO       | orderFormFieldData           | NULL                       |        5 | data-hot-1   |      469.4924907684326  |
+| ACME       | shipments        | NULL                       |       14 | data-hot-6   |     7011.800104141235   |
+| ACME       | shipments        | NULL                       |       27 | data-hot-7   |     5131.491161346436   |
+| ACME       | shipments        | NULL                       |        0 | data-hot-9   |     2460.8706073760986  |
+| ACME       | shipments        | NULL                       |        7 | data-hot-2   |     1501.8993682861328  |
+| ACME       | shipments        | NULL                       |       10 | data-hot-5   |      504.0952272415161  |
+| ACME       | shipments        | NULL                       |       29 | data-hot-3   |      501.0663766860962  |
+| ACME       | shipments        | NULL                       |       16 | data-hot-8   |      497.5628480911255  |
+| ACME       | shipments_events | ("sync_day"=1757376000000) |        3 | data-hot-2   |      481.20221996307373 |
+| ACME       | shipments_events | ("sync_day"=1757376000000) |        4 | data-hot-4   |      473.12464427948    |
+| ACME       | orders           | NULL                       |        5 | data-hot-1   |      469.4924907684326  |
 +-------------+------------------------------+----------------------------+----------+--------------+-------------------------+
 
 ```
@@ -405,7 +405,7 @@ SELECT
 ### for a partition
 
 ```sql
-cr> SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipmentFormFieldData' AND partition_ident = '04732dpl6or3gd1
+cr> SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipments' AND partition_ident = '04732dpl6or3gd1
     o60o30c1g' order by array_length(retention_leases['leases'], 1);
 +------------+----+
 | cnt_leases | id |
@@ -428,7 +428,7 @@ cr>
 
 ```sql
 
-SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipmentFormFieldData' AND array_length(retention_leases['leases'], 1) > 1 order by 1;
+SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.shards WHERE table_name = 'shipments' AND array_length(retention_leases['leases'], 1) > 1 order by 1;
 ```
 
 #### list partition ids
@@ -436,8 +436,8 @@ SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.sh
 ```sql
 cr> SELECT partition_ident, values
     FROM information_schema.table_partitions
-    WHERE table_schema = 'TURVO'
-      AND table_name = 'shipmentFormFieldData' limit 100;
+    WHERE table_schema = 'ACME'
+      AND table_name = 'shipments' limit 100;
 +--------------------------+--------------------------------+
 | partition_ident          | values                         |
 +--------------------------+--------------------------------+
@@ -450,8 +450,8 @@ cr> SELECT partition_ident, values
 
 cr> SELECT partition*ident, values
 FROM information_schema.table_partitions
-WHERE table_schema = 'TURVO'
-AND table_name = 'shipmentFormFieldData' limit 100;
+WHERE table_schema = 'ACME'
+AND table_name = 'shipments' limit 100;
 +--------------------------+--------------------------------+
 | partition_ident | values |
 +--------------------------+--------------------------------+
@@ -626,8 +626,8 @@ SELECT
       '" PARTITION (id_ts_month = ' || "values"['id_ts_month'] ||
       ') SET ("translog.flush_threshold_size" = ''2gb'');' AS alter_stmt
     FROM information_schema.table_partitions
-    WHERE table_schema = 'TURVO'
-      AND table_name = 'shipmentFormFieldData';
+    WHERE table_schema = 'ACME'
+      AND table_name = 'shipments';
 ```
 
 ## Cluster Health
@@ -656,14 +656,14 @@ SELECT 1 row in set (0.074 sec)
 ```sql
 
 cr> select * from sys.health;
-+--------+----------------+--------------------------+----------+-------------------------------------------------------------+------------------------------------+------------------------+
-| health | missing_shards | partition_ident          | severity | table_name                                                  | table_schema                       | underreplicated_shards |
-+--------+----------------+--------------------------+----------+-------------------------------------------------------------+------------------------------------+------------------------+
-| GREEN  |              0 | NULL                     |        1 | temp_filter                                                 | replication_third_filter           |                      0 |
-| GREEN  |              0 | 04732dpm60pj2cpm60o30c1g |        1 | shipmentFormFieldData_events                                | TURVO                              |                      0 |
-| GREEN  |              0 | NULL                     |        1 | shipment_carrier_order_external_id                          | replication_first_materialized     |                      0 |
-| GREEN  |              0 | 04732dhp60s38e1g60o30c1g |        1 | shipmentFormFieldData                                       | TURVO                              |                      0 |
-| GREEN  |              0 | NULL                     |        1 | account_tags                                                | replication_first_materialized     |                      0 |
++--------+----------------+--------------------------+----------+--------------------------+------------------------------------+------------------------+
+| health | missing_shards | partition_ident          | severity | table_name               | table_schema                       | underreplicated_shards |
++--------+----------------+--------------------------+----------+--------------------------+------------------------------------+------------------------+
+| GREEN  |              0 | NULL                     |        1 | temp_filter              | replication_third_filter           |                      0 |
+| GREEN  |              0 | 04732dpm60pj2cpm60o30c1g |        1 | shipments_events         | ACME                               |                      0 |
+| GREEN  |              0 | NULL                     |        1 | shipment_orders          | materialized                       |                      0 |
+| GREEN  |              0 | 04732dhp60s38e1g60o30c1g |        1 | shipments                | ACME                               |                      0 |
+| GREEN  |              0 | NULL                     |        1 | account_tags             | materialized                       |                      0 |
 ```
 
 ```sql
@@ -719,7 +719,7 @@ cr> SELECT
             END,
         2) AS deleted_ratio
     FROM sys.segments
-    WHERE table_schema = 'replication_first_materialized'
+    WHERE table_schema = 'materialized'
       AND table_name = 'orders_external_ids'
       AND shard_id IN (0,1,2,3,4)
     GROUP BY node['name'], table_schema, table_name, shard_id, partition_ident
@@ -728,16 +728,16 @@ cr> SELECT
 +--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
 | table_schema                   | table_name          | shard_id | partition_ident | node        | num_segments | total_size_bytes | total_docs | total_deleted_docs | deleted_ratio |
 +--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
-| replication_first_materialized | orders_external_ids |        0 |                 | data-hot-10 |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
-| replication_first_materialized | orders_external_ids |        0 |                 | data-hot-5  |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
-| replication_first_materialized | orders_external_ids |        2 |                 | data-hot-3  |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
-| replication_first_materialized | orders_external_ids |        2 |                 | data-hot-11 |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
-| replication_first_materialized | orders_external_ids |        3 |                 | data-hot-2  |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
-| replication_first_materialized | orders_external_ids |        3 |                 | data-hot-11 |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
-| replication_first_materialized | orders_external_ids |        4 |                 | data-hot-7  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
-| replication_first_materialized | orders_external_ids |        4 |                 | data-hot-8  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
-| replication_first_materialized | orders_external_ids |        1 |                 | data-hot-5  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
-| replication_first_materialized | orders_external_ids |        1 |                 | data-hot-3  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
+| materialized | orders_external_ids |        0 |                 | data-hot-10 |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
+| materialized | orders_external_ids |        0 |                 | data-hot-5  |           31 |      18142010447 |   53709076 |           16549742 |         23.56 |
+| materialized | orders_external_ids |        2 |                 | data-hot-3  |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
+| materialized | orders_external_ids |        2 |                 | data-hot-11 |           26 |      17939585648 |   53720030 |           16157118 |         23.12 |
+| materialized | orders_external_ids |        3 |                 | data-hot-2  |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
+| materialized | orders_external_ids |        3 |                 | data-hot-11 |           28 |      18016906587 |   53719225 |           15678177 |         22.59 |
+| materialized | orders_external_ids |        4 |                 | data-hot-7  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
+| materialized | orders_external_ids |        4 |                 | data-hot-8  |           28 |      17987623213 |   53698689 |           15545694 |         22.45 |
+| materialized | orders_external_ids |        1 |                 | data-hot-5  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
+| materialized | orders_external_ids |        1 |                 | data-hot-3  |           30 |      17924402947 |   53716575 |           15137731 |         21.99 |
 +--------------------------------+---------------------+----------+-----------------+-------------+--------------+------------------+------------+--------------------+---------------+
 ```
 
@@ -760,7 +760,7 @@ cr> SELECT
             END,
         2) AS deleted_ratio
     FROM sys.segments
-    WHERE table_schema = 'replication_first_materialized'
+    WHERE table_schema = 'materialized'
       AND table_name = 'orders_items'
       AND shard_id IN (0)
     GROUP BY node['name'], table_schema, segment_name, shard_id, table_name, partition_ident
@@ -769,14 +769,14 @@ cr> SELECT
 +--------------------------------+--------------+----------+--------------+-----------------+------------+--------------+------------------+------------+--------------------+---------------+
 | table_schema                   | table_name   | shard_id | segment_name | partition_ident | node       | num_segments | total_size_bytes | total_docs | total_deleted_docs | deleted_ratio |
 +--------------------------------+--------------+----------+--------------+-----------------+------------+--------------+------------------+------------+--------------------+---------------+
-| replication_first_materialized | orders_items |        0 | _yb5         |                 | data-hot-2 |            1 |          3540107 |       4725 |              27740 |         85.45 |
-| replication_first_materialized | orders_items |        0 | _yb5         |                 | data-hot-8 |            1 |          3540107 |       4725 |              27740 |         85.45 |
-| replication_first_materialized | orders_items |        0 | _yci         |                 | data-hot-2 |            1 |         12848803 |      21477 |              28810 |         57.29 |
-| replication_first_materialized | orders_items |        0 | _yci         |                 | data-hot-8 |            1 |         12848803 |      21477 |              28810 |         57.29 |
-| replication_first_materialized | orders_items |        0 | _ybf         |                 | data-hot-2 |            1 |          9122185 |      13905 |              17059 |         55.09 |
-| replication_first_materialized | orders_items |        0 | _ybf         |                 | data-hot-8 |            1 |          9122185 |      13905 |              17059 |         55.09 |
-| replication_first_materialized | orders_items |        0 | _yaw         |                 | data-hot-2 |            1 |         77757363 |     147539 |             177513 |         54.61 |
-| replication_first_materialized | orders_items |        0 | _yaw         |                 | data-hot-8 |            1 |         77757363 |     147539 |             177513 |         54.61 |
+| materialized | orders_items |        0 | _yb5         |                 | data-hot-2 |            1 |          3540107 |       4725 |              27740 |         85.45 |
+| materialized | orders_items |        0 | _yb5         |                 | data-hot-8 |            1 |          3540107 |       4725 |              27740 |         85.45 |
+| materialized | orders_items |        0 | _yci         |                 | data-hot-2 |            1 |         12848803 |      21477 |              28810 |         57.29 |
+| materialized | orders_items |        0 | _yci         |                 | data-hot-8 |            1 |         12848803 |      21477 |              28810 |         57.29 |
+| materialized | orders_items |        0 | _ybf         |                 | data-hot-2 |            1 |          9122185 |      13905 |              17059 |         55.09 |
+| materialized | orders_items |        0 | _ybf         |                 | data-hot-8 |            1 |          9122185 |      13905 |              17059 |         55.09 |
+| materialized | orders_items |        0 | _yaw         |                 | data-hot-2 |            1 |         77757363 |     147539 |             177513 |         54.61 |
+| materialized | orders_items |        0 | _yaw         |                 | data-hot-8 |            1 |         77757363 |     147539 |             177513 |         54.61 |
 ```
 
 ## table settings
@@ -800,11 +800,11 @@ detect custom routing column
 
 ```sql
 
-| TURVO        | slotMetaDataDocument_failures                 | NULL           |                1 |
-| TURVO        | tasks_failures_1                              | NULL           |                1 |
-| TURVO        | orderFormFieldData_events                     | ["sync_day"]   |                1 |
-| TURVO        | approvalFormFieldData_transforms              | NULL           |                1 |
-+--------------+-----------------------------------------------+----------------+------------------+
+| ACME        | documents   | NULL           |                1 |
+| ACME        | tasks       | NULL           |                1 |
+| ACME        | orders      | ["sync_day"]   |                1 |
+| ACME        | approvals   | NULL           |                1 |
++--------------+------------+----------------+------------------+
 SELECT 158 rows in set (0.261 sec)
 cr> SELECT
           table_schema,
@@ -830,11 +830,11 @@ table_schema,
 table_name,
 partitioned_by, settings['translog']['flush_threshold_size']
 FROM information_schema.tables
-WHERE table_name = 'orderFormFieldData';
+WHERE table_name = 'orders';
 +--------------+--------------------+----------------+----------------------------------------------+
 | table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
 +--------------+--------------------+----------------+----------------------------------------------+
-| TURVO | orderFormFieldData | NULL | 2147483648 |
+| ACME | orders | NULL | 2147483648 |
 +--------------+--------------------+----------------+----------------------------------------------+
 SELECT 1 row in set (0.232 sec)
 cr> SELECT
@@ -846,7 +846,7 @@ WHERE table_name = 'account';
 +--------------------------------+------------+----------------+----------------------------------------------+
 | table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
 +--------------------------------+------------+----------------+----------------------------------------------+
-| TURVO_MySQL | account | NULL | 536870912 |
+| ACME_MySQL | account | NULL | 536870912 |
 | replication_third_materialized | account | NULL | 536870912 |
 +--------------------------------+------------+----------------+----------------------------------------------+
 SELECT 2 rows in set (0.226 sec)

@@ -51,8 +51,8 @@ The command uses separate indicators for write activity and query performance:
 Write Activity: 🟢 Active • 🟡 Slow • 🔴 Stale
 Query Performance: ⚡ >1000ms • ⚠️ Anomaly
 
-19:27:33.681 | INFO | 🟢 TURVO.orderFormFieldData // _seq_no +1234 // total_docs +567 // 45ms
-19:27:34.234 | INFO | 🟡 TURVO.inventoryData // _seq_no +12 // total_docs ±0 // 123ms
+19:27:33.681 | INFO | 🟢 ACME.orders // _seq_no +1234 // total_docs +567 // 45ms
+19:27:34.234 | INFO | 🟡 ACME.inventory // _seq_no +12 // total_docs ±0 // 123ms
 19:27:35.105 | INFO | 🔴 archive.old_events // _seq_no ±0 // total_docs ±0 // 2100ms ⚡
 
 Note: 🟡🔴 indicate write activity level, ⚡ indicates slow query performance
@@ -95,10 +95,10 @@ Press CTRL+C to see detailed monitoring statistics:
 • Query failures: 2
 
 • Tables monitored (5):
-  - TURVO.orderFormFieldData
-  - TURVO.inventoryLevelFormFieldData
-  - replication_first_materialized.orders_items
-  - TURVO.inventoryFormFieldData
+  - ACME.orders
+  - ACME.inventory_levels
+  - materialized.orders_items
+  - ACME.inventory
   - archive.events[date=2024-01-15]
 ```
 
@@ -114,7 +114,7 @@ The command automatically handles partitioned tables by:
 Example with partitioned table:
 
 ```
-19:28:15.442 | INFO | 🟢 TURVO.events[date=2024-01-15] // _seq_no +89 // total_docs +45 // 67ms
+19:28:15.442 | INFO | 🟢 ACME.events[date=2024-01-15] // _seq_no +89 // total_docs +45 // 67ms
 ```
 
 ## Use Cases
