@@ -277,7 +277,7 @@ Data readability monitor <read-check>
 :caption: Development
 :maxdepth: 1
 :hidden:
-sandbox
+Sandbox <sandbox>
 Changelog <changes>
 Notes <notes/index>
 :::

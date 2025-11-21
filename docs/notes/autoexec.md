@@ -1,4 +1,8 @@
-# AutoExec Feature: Technical Implementation
+# Autoexec feature
+
+:::{div} sd-text-muted
+Technical implementation notes.
+:::
 
 ## Summary
 
