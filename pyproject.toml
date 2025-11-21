@@ -8,7 +8,8 @@ version = "0.0.0"
 description = "CrateDB XLens looking-glass utility"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+license-files = [ "LICENSE" ]
+requires-python = ">=3.10"
 dependencies = [
     "click>=8,<9",
     "requests>=2.28,<3",
@@ -16,6 +17,57 @@ dependencies = [
     "rich<14",
     "pyyaml<7",
     "loguru>=0.7,<1",
+]
+keywords = [
+    "cratedb",
+    "administration",
+    "analysis",
+    "looking-glass",
+    "shards",
+    "sizing",
+    "cluster",
+]
+authors = [
+  { name = "The CrateDB Developers", email = "office@crate.io" },
+]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Education",
+  "Intended Audience :: Information Technology",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: SQL",
+  "Topic :: Adaptive Technologies",
+  "Topic :: Communications",
+  "Topic :: Database",
+  "Topic :: Documentation",
+  "Topic :: Education",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Information Analysis",
+  "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Software Development :: Pre-processors",
+  "Topic :: Software Development :: Testing",
+  "Topic :: System :: Archiving",
+  "Topic :: System :: Benchmark",
+  "Topic :: System :: Clustering",
+  "Topic :: System :: Distributed Computing",
+  "Topic :: System :: Logging",
+  "Topic :: System :: Monitoring",
+  "Topic :: System :: Networking",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Text Processing",
+  "Topic :: Utilities",
 ]
 
 [project.scripts]
@@ -36,6 +88,12 @@ docs = [
     "sphinxcontrib-mermaid<1",
     "sphinxext-opengraph<1",
 ]
+
+[project.urls]
+Changelog = "https://cratedb-xlens.readthedocs.io/changes.html"
+Documentation = "https://cratedb-xlens.readthedocs.io/"
+Issues = "https://github.com/crate-workbench/cratedb-xlens/issues"
+Repository = "https://github.com/crate-workbench/cratedb-xlens"
 
 [tool.coverage.run]
 source = ["src"]
