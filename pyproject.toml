@@ -22,6 +22,15 @@ dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0"
 ]
+docs = [
+    "furo>=2024",
+    "myst-parser[linkify]>=0.18,<4",
+    "sphinx-autobuild>=2024",
+    "sphinx-copybutton",
+    "sphinx-design-elements<1",
+    "sphinxcontrib-mermaid<1",
+    "sphinxext-opengraph<1",
+]
 
 [tool.coverage.run]
 source = ["src"]
@@ -71,4 +80,16 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest-cov>=7.0.0",
+]
+
+[tool.poe.tasks]
+
+docs-autobuild = [
+  { cmd = "sphinx-autobuild --open-browser --watch src docs docs/_build" },
+]
+docs-html = [
+  { cmd = "sphinx-build -W --keep-going docs docs/_build" },
+]
+docs-linkcheck = [
+  { cmd = "sphinx-build -W --keep-going -b linkcheck docs docs/_build" },
 ]
