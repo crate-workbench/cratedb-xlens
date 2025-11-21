@@ -1,5 +1,5 @@
 [project]
-name = "xmover"
+name = "cratedb-xlens"
 version = "0.1.0"
 description = "CrateDB shard analyzer and movement tool"
 readme = "README.md"
@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xmover = "xmover.cli:main"
+xmover = "cratedb_xlens.cli:main"
 
 [project.optional-dependencies]
 dev = [
