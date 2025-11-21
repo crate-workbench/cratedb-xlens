@@ -56,8 +56,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 WORKDIR /app
 
 # Copy application code
-COPY --chown=xmover:xmover src/ ./src/
-COPY --chown=xmover:xmover pyproject.toml README.md ./
+COPY --chown=xmover:xmover . .
 
 # Install application in editable mode
 # TODO: Why not install the wheel package from the previous build step?
@@ -73,6 +72,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Set default command
 ENTRYPOINT ["xmover"]
 CMD ["--help"]
+
+# Copy selftest.sh to the image
+COPY release/oci/selftest.sh /usr/local/bin
 
 # Labels for metadata
 LABEL org.opencontainers.image.title="XMover"

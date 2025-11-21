@@ -1,6 +1,8 @@
 *
+!*.md
 !config
 !docs
-!src
-!*.md
+!LICENSE
 !pyproject.toml
+!release
+!src
