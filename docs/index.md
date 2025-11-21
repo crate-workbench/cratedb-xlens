@@ -273,3 +273,10 @@ Quick reference <maintenance-quick-reference>
 Node maintenance <node-maintenance>
 Data readability monitor <read-check>
 :::
+:::{toctree}
+:caption: Development
+:maxdepth: 1
+:hidden:
+sandbox
+Changelog <changes>
+:::
