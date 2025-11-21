@@ -1,4 +1,6 @@
-# Node Maintenance Quick Reference
+(quick-reference)=
+
+# CrateDB Node Maintenance Quick Reference
 
 ## Command Syntax
 

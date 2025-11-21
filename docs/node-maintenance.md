@@ -1,3 +1,5 @@
+(node-maintenance)=
+
 # CrateDB Node Maintenance Analysis
 
 The `check-maintenance` command provides comprehensive analysis of CrateDB node decommissioning scenarios, helping you understand the impact and requirements before taking a node offline for maintenance.

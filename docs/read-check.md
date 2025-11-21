@@ -1,4 +1,6 @@
-# read-check - Cluster Data Readability Monitor
+(read-check)=
+
+# CrateDB Cluster Data Readability Monitor
 
 The `read-check` command is a professional monitoring tool that continuously checks cluster health by sampling data from the largest tables and partitions in your CrateDB cluster.
 
