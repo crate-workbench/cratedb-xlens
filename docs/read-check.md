@@ -192,7 +192,7 @@ The command uses CrateDB's built-in query duration from the response metadata, a
 
 ## Integration with Other Commands
 
-The `read-check` command complements other XMover monitoring tools:
+The `read-check` command complements other XLens monitoring tools:
 
 - Use with `monitor-recovery --watch` to track recovery progress
 - Combine with `active-shards --watch` to correlate write activity
@@ -208,4 +208,4 @@ The `read-check` command complements other XMover monitoring tools:
 6. **Reliability**: Check statistics on exit to validate connection stability
 7. **Efficiency**: Optimized queries and database-side timing make frequent monitoring practical
 
-The `read-check` command is the first XMover command to use structured logging with loguru, providing professional-grade monitoring capabilities with efficient query patterns for CrateDB clusters.
+The `read-check` command is the first XLens command to use structured logging with loguru, providing professional-grade monitoring capabilities with efficient query patterns for CrateDB clusters.

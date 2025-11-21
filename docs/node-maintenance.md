@@ -351,7 +351,7 @@ Shard relocation only considers nodes in the same availability zone:
 
 ## Integration with Other Commands
 
-The maintenance analysis works well with other xmover commands:
+The maintenance analysis works well with other `xmover` commands:
 
 ```bash
 # Get detailed shard distribution before maintenance

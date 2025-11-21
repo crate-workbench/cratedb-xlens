@@ -1,6 +1,8 @@
-# XMover - CrateDB Shard Analyzer and Movement Tool
+# CrateDB XLens
 
-A comprehensive Python tool for analyzing CrateDB shard distribution across nodes and availability zones, and generating safe SQL commands for shard rebalancing and node decommissioning.
+A comprehensive looking-glass utility for analyzing CrateDB shard
+distribution across nodes and availability zones, and generating
+safe SQL commands for shard rebalancing and node decommissioning.
 
 ## Features
 
@@ -15,28 +17,16 @@ A comprehensive Python tool for analyzing CrateDB shard distribution across node
 - **Dry Run Mode**: Test recommendations without generating actual SQL commands
 - **Safety Validation**: Comprehensive checks to ensure data availability during moves
 
-## Installation
+## Install
 
-**Note: This project uses [uv](https://docs.astral.sh/uv/) for dependency management. Make sure you have uv installed.**
-
-1. Clone the repository:
-
-```bash
-git clone <repository-url>
-cd xmover
+Install package from PyPI.
+```shell
+pip install --upgrade cratedb-xlens
 ```
 
-2. Install using uv (recommended) or pip:
+## Configure
 
-```bash
-# Using uv
-uv sync
-
-# Or using pip
-pip install -e .
-```
-
-3. Create a `.env` file with your CrateDB connection details:
+Create an `.env` file with your CrateDB connection details:
 
 **For localhost CrateDB:**
 
@@ -283,14 +273,14 @@ This prevents the automatic rebalancer from interfering with your manual moves. 
 
 **💡 Smart Disk Usage Thresholds**
 
-XMover automatically uses your cluster's disk watermark settings to determine safe disk usage thresholds:
+XLens automatically uses your cluster's disk watermark settings to determine safe disk usage thresholds:
 
 ```bash
-# XMover queries your cluster's watermark configuration
+# XLens queries your cluster's watermark configuration
 SELECT settings['cluster']['routing']['allocation']['disk']['watermark'] FROM sys.cluster;
 SELECT settings['cluster']['routing']['allocation']['disk']['threshold_enabled'] FROM sys.cluster;
 
-# Example: Cluster with 85% low watermark → XMover uses 83% threshold (with 2% safety buffer)
+# Example: Cluster with 85% low watermark → XLens uses 83% threshold (with 2% safety buffer)
 xmover recommend --max-disk-usage 90  # Auto-adjusted to 83% with warning
 xmover recommend --max-disk-usage 80  # Used as-is (within safe limits)
 ```
@@ -758,7 +748,7 @@ Tests the connection to CrateDB and displays basic cluster information.
 
 ### Analysis vs Operational Views
 
-XMover provides two distinct views of your cluster:
+XLens provides two distinct views of your cluster:
 
 1. **Analysis View** (`analyze`, `zone-analysis`): Includes ALL shards regardless of state for complete cluster visibility
 2. **Operational View** (`find-candidates`, `recommend`): Only includes healthy shards (STARTED + 100% recovered) for safe operations
@@ -969,7 +959,7 @@ The tool automatically appends `/_sql` to the endpoint.
 
 ## Troubleshooting
 
-XMover provides comprehensive troubleshooting tools to help diagnose and resolve shard movement issues.
+XLens provides comprehensive troubleshooting tools to help diagnose and resolve shard movement issues.
 
 ### Quick Diagnosis Commands
 
@@ -1048,7 +1038,7 @@ xmover explain-error "NO(a copy of this shard is already allocated to this node)
 
 ### Configurable Safety Thresholds
 
-XMover uses configurable safety thresholds to prevent risky moves:
+XLens uses configurable safety thresholds to prevent risky moves:
 
 **Disk Usage Threshold (default: 85%)**
 

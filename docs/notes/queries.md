@@ -1,9 +1,15 @@
-# Queries
+# Query expressions
+
+:::{div} sd-text-muted
+An SQL scratchpad.
+:::
 
 ## Shard Distribution over Nodes
 
 ```sql
 select node['name'], sum(size) / 1024^3, count(id)  from sys.shards  group by 1  order by 1 asc;
+```
+```text
 +--------------+-----------------------------+-----------+
 | node['name'] | (sum(size) / 1.073741824E9) | count(id) |
 +--------------+-----------------------------+-----------+
@@ -22,8 +28,9 @@ SELECT 8 rows in set (0.061 sec)
 ## Shard Distribution PRIMARY/REPLICAS over nodes
 
 ```sql
-
 select node['name'], primary,  sum(size) / 1024^3, count(id)  from sys.shards  group by 1,2  order by 1 asc;
+```
+```text
 +--------------+---------+-----------------------------+-----------+
 | node['name'] | primary | (sum(size) / 1.073741824E9) | count(id) |
 +--------------+---------+-----------------------------+-----------+
@@ -43,12 +50,11 @@ select node['name'], primary,  sum(size) / 1024^3, count(id)  from sys.shards  g
 | data-hot-6   | TRUE    |          0.9159421799704432 |         8 |
 | NULL         | FALSE   |          0.0                |        35 |
 +--------------+---------+-----------------------------+-----------+
-
 ```
 
-## Nodes available Space
+## Nodes available space
 
-```sql
+```text
 +------------+--------------------+-----------------------------------------------+
 | name       | attributes['zone'] | (fs[1]['disks']['available'] / 1.073741824E9) |
 +------------+--------------------+-----------------------------------------------+
@@ -62,7 +68,7 @@ select node['name'], primary,  sum(size) / 1024^3, count(id)  from sys.shards  g
 +------------+--------------------+-----------------------------------------------+
 ```
 
-## List biggest SHARDS on a particular Nodes
+## List largest shards on a particular node
 
 ```sql
 select node['name'], table_name, schema_name, id,  sum(size) / 1024^3 from sys.shards
@@ -70,6 +76,8 @@ select node['name'], table_name, schema_name, id,  sum(size) / 1024^3 from sys.s
     AND routing_state = 'STARTED'
     AND recovery['files']['percent'] = 0
     group by 1,2,3,4  order by 5  desc limit 8;
+```
+```text
 +--------------+-----------------------+-------------+----+-----------------------------+
 | node['name'] | table_name            | schema_name | id | (sum(size) / 1.073741824E9) |
 +--------------+-----------------------+-------------+----+-----------------------------+
@@ -88,14 +96,9 @@ SELECT 8 rows in set (0.062 sec)
 ## Move REROUTE
 
 ```sql
-
 alter table "curvo"."bottlefieldData" reroute move shard 21 from 'data-hot-2' to 'data-hot-3';
 ```
-
----
-
 ```sql
-
 WITH shard_summary AS (
     SELECT
         node['name'] AS node_name,
@@ -150,7 +153,8 @@ ORDER BY
     s.node['name'],
     s."primary" DESC,  -- Primary shards first
     s.id;
-
+```
+```sql
 -- Summary by zone and shard type
 SELECT
     n.attributes['zone'] AS zone,
@@ -170,7 +174,6 @@ WHERE s.table_name = 'orderffD'  -- Replace with your specific table name
     AND s.recovery['files']['percent'] = 0
 GROUP BY n.attributes['zone'], s."primary"
 ORDER BY zone, shard_type DESC;
-
 ```
 
 ## Relocation
@@ -192,7 +195,8 @@ SELECT
     FROM sys.allocations
     WHERE current_state != 'STARTED' and table_name = 'dispatchio'            and shard_id = 19
     ORDER BY current_state, table_name, shard_id;
-
+```
+```text
 +-----------------------+----------+---------------+-------------+------------------------+
 | table_name            | shard_id | current_state | explanation | node_id                |
 +-----------------------+----------+---------------+-------------+------------------------+
@@ -208,8 +212,7 @@ SELECT
 
 ```
 
-```sql
-
+```psql
 SELECT
         table_name,
         shard_id,
@@ -219,12 +222,14 @@ SELECT
     FROM sys.allocations
     WHERE current_state != 'STARTED' and table_name = 'dispatchio            and shard_id = 19
     ORDER BY current_state, table_name, shard_id;
-
 ```
 
-# "BIGDUDES" Focuses on your **biggest storage consumers** and shows how their shards are distributed across nodes.
+## "BIGDUDES" finds largest storage consumers
 
-´´´sql
+Focuses on your **largest storage consumers** and shows how their
+shards are distributed across nodes.
+
+```psql
 WITH largest_tables AS (
 SELECT
 schema_name,
@@ -251,13 +256,11 @@ FROM sys.shards s
 INNER JOIN largest_tables lt ON (s.schema_name = lt.schema_name AND s.table_name = lt.table_name)
 GROUP BY s.schema_name, s.table_name, s.node['name']
 ORDER BY s.schema_name, s.table_name, s.node['name'];
-
-````
+```
 
 # Shard Distribution
 
 ```sql
-
 SELECT
         CASE
             WHEN size < 1*1024*1024*1024::bigint THEN '<1GB'
@@ -279,7 +282,7 @@ SELECT
             WHEN '10GB-50GB' THEN 4
             ELSE 5
         END;
-````
+```
 
 ## Shard Distribution by Node
 
@@ -368,7 +371,7 @@ SELECT
 
 ```
 
-# Segements per Shard
+## Segments per Shard
 
 ```sql
 SELECT
@@ -434,10 +437,12 @@ SELECT array_length(retention_leases['leases'], 1) as cnt_leases, id from sys.sh
 #### list partition ids
 
 ```sql
-cr> SELECT partition_ident, values
-    FROM information_schema.table_partitions
-    WHERE table_schema = 'ACME'
-      AND table_name = 'shipments' limit 100;
+SELECT partition_ident, values
+FROM information_schema.table_partitions
+WHERE table_schema = 'ACME'
+  AND table_name = 'shipments' limit 100;
+```
+```text
 +--------------------------+--------------------------------+
 | partition_ident          | values                         |
 +--------------------------+--------------------------------+
@@ -448,10 +453,13 @@ cr> SELECT partition_ident, values
 | 04732dhk60sjid9i60o30c1g | {"id_ts_month": 1640995200000} |
 ```
 
-cr> SELECT partition*ident, values
+```sql
+SELECT partition*ident, values
 FROM information_schema.table_partitions
 WHERE table_schema = 'ACME'
 AND table_name = 'shipments' limit 100;
+```
+```text
 +--------------------------+--------------------------------+
 | partition_ident | values |
 +--------------------------+--------------------------------+
@@ -525,11 +533,16 @@ AND table_name = 'shipments' limit 100;
 | 04732dhh68oj6dpm60o30c1g | {"id_ts_month": 1612137600000} |
 +--------------------------+--------------------------------+
 SELECT 68 rows in set (0.006 sec)
+```
 
 ## Disable Rebalancing
 
+```sql
 SET GLOBAL PERSISTENT "cluster.routing.rebalance.enable"='xxx'; -- all / none
-[data-hot-7] updating [cluster.routing.rebalance.enable] from [all] to [none]`
+```
+```text
+[data-hot-7] updating [cluster.routing.rebalance.enable] from [all] to [none]
+```
 
 ### Report on schema, tables, sizes, ...
 
@@ -569,9 +582,7 @@ JOIN columns c ON s.table_name = c.table_name AND s.table_schema = c.table_schem
 JOIN tables t ON s.table_name = t.table_name AND s.table_schema = t.table_schema
 ORDER BY table_schema, table_name, partition_ident
 ```
-
----
-
+```text
 partition_ident | values |
 +--------------------------+--------------------------------+
 | 04732dhp6ooj2e1k60o30c1g | {"id_ts_month": 1696118400000} |
@@ -617,6 +628,7 @@ partition_ident | values |
 | 04732dho70ojce9m60o30c1g | {"id_ts_month": 1688169600000} |
 | 04732dho60pj0dpi60o30c1g | {"id_ts_month": 1680307200000} |
 +--------------------------+--------------------------------+
+```
 
 ## set translog_flush_size
 
@@ -633,7 +645,6 @@ SELECT
 ## Cluster Health
 
 ```sql
-
 cr> SELECT
         (SELECT health FROM sys.health ORDER BY severity DESC LIMIT 1) AS cluster_health,
         COUNT(*) FILTER (WHERE health = 'GREEN') AS green_entities,
@@ -650,12 +661,12 @@ cr> SELECT
 | GREEN          |            566 |               0 |            0 |              0 |          590 |              100 |
 +----------------+----------------+-----------------+--------------+----------------+--------------+------------------+
 SELECT 1 row in set (0.074 sec)
-
 ```
 
 ```sql
-
 cr> select * from sys.health;
+```
+```text
 +--------+----------------+--------------------------+----------+--------------------------+------------------------------------+------------------------+
 | health | missing_shards | partition_ident          | severity | table_name               | table_schema                       | underreplicated_shards |
 +--------+----------------+--------------------------+----------+--------------------------+------------------------------------+------------------------+
@@ -667,7 +678,6 @@ cr> select * from sys.health;
 ```
 
 ```sql
-
 cr> SELECT
         (SELECT health FROM sys.health ORDER BY severity DESC LIMIT 1) AS cluster_health,
         COUNT(*) FILTER (WHERE health = 'GREEN') AS green_entities,
@@ -681,7 +691,8 @@ cr> SELECT
         (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('sys', 'information_schema', 'pg_catalog')) AS total_tables,
         (SELECT COUNT(*) FROM information_schema.table_partitions) AS total_partitions
     FROM sys.health;
-
+```
+```text
 cluster_health                | GREEN
 green_entities                | 566
 green_underreplicated_shards  | 0
@@ -696,9 +707,9 @@ total_partitions              | 100
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ```
 
-## Segements
+## Segments
 
-Careful these are expensive.
+Be careful, these are expensive.
 
 ```sql
 
@@ -815,34 +826,40 @@ cr> SELECT
         WHERE settings['merge']['scheduler']['max_thread_count'] = 1
 ```
 
-#### generate reset max_thread_count statements...
+### Generate reset max_thread_count statements...
 
-```sql
+```psql
 SELECT
   'ALTER TABLE "' || table_schema || '"."' || table_name || '" RESET ("merge.scheduler.max_thread_count");' AS reset_statement
 FROM information_schema.tables
 WHERE settings['merge']['scheduler']['max_thread_count'] = 1;
-
 ```
 
+```sql
 cr> SELECT
 table_schema,
 table_name,
 partitioned_by, settings['translog']['flush_threshold_size']
 FROM information_schema.tables
 WHERE table_name = 'orders';
+```
+```text
 +--------------+--------------------+----------------+----------------------------------------------+
 | table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
 +--------------+--------------------+----------------+----------------------------------------------+
 | ACME | orders | NULL | 2147483648 |
 +--------------+--------------------+----------------+----------------------------------------------+
 SELECT 1 row in set (0.232 sec)
+```
+```sql
 cr> SELECT
 table_schema,
 table_name,
 partitioned_by, settings['translog']['flush_threshold_size']
 FROM information_schema.tables
 WHERE table_name = 'account';
+```
+```text
 +--------------------------------+------------+----------------+----------------------------------------------+
 | table_schema | table_name | partitioned_by | settings['translog']['flush_threshold_size'] |
 +--------------------------------+------------+----------------+----------------------------------------------+
@@ -850,4 +867,4 @@ WHERE table_name = 'account';
 | replication_third_materialized | account | NULL | 536870912 |
 +--------------------------------+------------+----------------+----------------------------------------------+
 SELECT 2 rows in set (0.226 sec)
-cr>
+```
