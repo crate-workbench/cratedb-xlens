@@ -1,10 +1,14 @@
-# XMover Documentation
+(index)=
 
-Welcome to the XMover documentation! XMover is a comprehensive tool for managing CrateDB clusters, providing powerful commands for shard analysis, maintenance planning, and cluster optimization.
+# CrateDB XLens
+
+Welcome to the XLens documentation! XLens is a comprehensive utility for
+analyzing CrateDB clusters. It provides powerful commands for shard
+analysis, maintenance planning, and cluster optimization.
 
 ## Getting Started
 
-XMover is designed to help CrateDB administrators make informed decisions about cluster maintenance, shard distribution, and performance optimization.
+XLens is designed to help CrateDB administrators make informed decisions about cluster maintenance, shard distribution, and performance optimization.
 
 ### Installation
 
@@ -22,7 +26,7 @@ uv install
 export CRATEDB_HOST=your-cluster-host
 export CRATEDB_PORT=4200
 
-# Run XMover commands
+# Run XLens commands
 xmover cluster-overview
 ```
 
@@ -37,7 +41,7 @@ Comprehensive analysis for safe node decommissioning and maintenance operations.
 - **Time Estimation**: Get realistic recovery time estimates
 - **Safety Checks**: Validate cluster health before maintenance
 
-[Read the Node Maintenance Guide →](node-maintenance.md)
+{ref}`Read the Node Maintenance Guide → <node-maintenance>`
 
 ### 📊 Shard Distribution Analysis
 
@@ -112,9 +116,8 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 
 ### Detailed Guides
 
-- **[Node Maintenance Guide](node-maintenance.md)** - Complete guide to planning and executing node maintenance
-- **[Quick Reference](maintenance-quick-reference.md)** - Cheat sheet for common maintenance operations
-- **[Examples](maintenance-examples.md)** - Real-world maintenance scenarios and solutions
+- **{ref}`Node Maintenance Guide <node-maintenance>`** - Complete guide to planning and executing node maintenance
+- **{ref}`Quick Reference <quick-reference>`** - Cheat sheet for common maintenance operations
 
 ### Reference Materials
 
@@ -221,7 +224,7 @@ WHERE routing_state IN ('RELOCATING', 'INITIALIZING');
 
 ## Integration
 
-XMover integrates well with existing CrateDB monitoring and management tools:
+XLens integrates well with existing CrateDB monitoring and management tools:
 
 - **Monitoring Systems**: Export metrics for Prometheus, Grafana
 - **Automation**: Use in CI/CD pipelines and automation scripts
@@ -242,7 +245,7 @@ XMover integrates well with existing CrateDB monitoring and management tools:
 - Schedule maintenance during low-traffic periods
 - Monitor cluster performance during and after maintenance
 - Document all maintenance activities
-- Keep XMover updated to the latest version
+- Keep XLens updated to the latest version
 
 ### Contributing
 
@@ -253,12 +256,20 @@ XMover integrates well with existing CrateDB monitoring and management tools:
 
 ## Version Information
 
-This documentation covers XMover features and functionality. For the latest updates and release notes, check the project repository.
+This documentation covers XLens features and functionality. For the latest updates and release notes, check the project repository.
 
 ---
 
-**Quick Start**: Jump to the [Node Maintenance Quick Reference](maintenance-quick-reference.md) for immediate help with common operations.
+**Quick Start**: Jump to the {ref}`quick-reference` for immediate help with common operations.
 
-**Deep Dive**: Read the [Complete Node Maintenance Guide](node-maintenance.md) for comprehensive understanding.
+**Deep Dive**: Read the {ref}`node-maintenance` for comprehensive understanding.
 
-**Real Examples**: Check out [Maintenance Examples](maintenance-examples.md) for real-world scenarios.
+
+:::{toctree}
+:caption: Handbook
+:maxdepth: 1
+:hidden:
+Quick reference <maintenance-quick-reference>
+Node maintenance <node-maintenance>
+Data readability monitor <read-check>
+:::
