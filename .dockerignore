@@ -1,6 +1,7 @@
 *
 !config
 !docs
+!release
 !src
 !*.md
 !pyproject.toml

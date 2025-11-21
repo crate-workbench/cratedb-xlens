@@ -36,6 +36,12 @@ uv sync
 pip install -e .
 ```
 
+Invoke using Docker or Podman.
+```shell
+docker run --rm --network=host ghcr.io/crate-workbench/cratedb-xlens
+```
+
+
 3. Create a `.env` file with your CrateDB connection details:
 
 **For localhost CrateDB:**

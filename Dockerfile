@@ -74,6 +74,9 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 ENTRYPOINT ["xmover"]
 CMD ["--help"]
 
+# Copy selftest.sh to the image
+COPY release/oci/selftest.sh /usr/local/bin
+
 # Labels for metadata
 LABEL org.opencontainers.image.title="XMover"
 LABEL org.opencontainers.image.description="CrateDB Shard Analyzer and Movement Tool"
