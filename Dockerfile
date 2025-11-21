@@ -1,5 +1,12 @@
 # Multi-stage build for minimal production image
-FROM python:3.12-slim AS builder
+FROM docker.io/python:3.12-slim-bookworm AS builder
+
+# Configure build environment.
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV UV_COMPILE_BYTECODE=true
+ENV UV_LINK_MODE=copy
+ENV UV_PYTHON_DOWNLOADS=never
+ENV UV_SYSTEM_PYTHON=true
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -10,26 +17,36 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy dependency files
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml ./
 
-# Install uv for fast dependency management
-RUN pip install uv
+# Install the `uv` package manager.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 # Install dependencies using uv sync (without installing the project itself)
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --no-dev --no-install-project
 
 # Production stage
-FROM python:3.12-slim
+FROM docker.io/python:3.12-slim-bookworm
+
+# Configure build environment.
+ENV PIP_ROOT_USER_ACTION=ignore
+ENV UV_COMPILE_BYTECODE=true
+ENV UV_LINK_MODE=copy
+ENV UV_PYTHON_DOWNLOADS=never
+ENV UV_SYSTEM_PYTHON=true
+
+# Install the `uv` package manager.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Install `curl`.
+RUN true && \
+    apt-get update && apt-get install --yes curl && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN groupadd --gid 1000 xmover && \
   useradd --uid 1000 --gid xmover --shell /bin/bash --create-home xmover
-
-# Install runtime dependencies only
-RUN apt-get update && apt-get install -y \
-  curl \
-  && rm -rf /var/lib/apt/lists/* \
-  && apt-get clean
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /opt/venv
@@ -43,7 +60,8 @@ COPY --chown=xmover:xmover src/ ./src/
 COPY --chown=xmover:xmover pyproject.toml README.md ./
 
 # Install application in editable mode
-RUN pip install -e .
+# TODO: Why not install the wheel package from the previous build step?
+RUN uv pip install -e .
 
 # Switch to non-root user
 USER xmover
@@ -59,6 +77,6 @@ CMD ["--help"]
 # Labels for metadata
 LABEL org.opencontainers.image.title="XMover"
 LABEL org.opencontainers.image.description="CrateDB Shard Analyzer and Movement Tool"
-LABEL org.opencontainers.image.version="v0.0.1"
+LABEL org.opencontainers.image.version="v0.0.0"
 LABEL org.opencontainers.image.vendor="XMover Team"
 LABEL org.opencontainers.image.licenses="MIT"
