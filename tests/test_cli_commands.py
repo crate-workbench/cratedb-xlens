@@ -176,7 +176,7 @@ class TestTestConnectionCommand:
     
     def test_test_connection_success(self, runner):
         """Test successful connection test"""
-        with patch('cratedb_xlens.database.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             # Mock both the main startup client and the command client
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -193,7 +193,7 @@ class TestTestConnectionCommand:
     
     def test_test_connection_failure(self, runner):
         """Test failed connection test"""
-        with patch('cratedb_xlens.database.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             # Create different mocks for different calls
             call_count = 0
             def mock_test_connection():
