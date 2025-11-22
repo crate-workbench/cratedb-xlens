@@ -15,5 +15,5 @@ wheels/
 .idea
 stuff/**
 
-.coverage
+.coverage*
 coverage.xml
