@@ -118,7 +118,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient') as mock_db:
             mock_db.return_value.test_connection.return_value = True
             result = runner.invoke(main, ['--help'])
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'check-maintenance' in result.output
 
     def test_command_help(self, runner):
@@ -126,7 +126,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient') as mock_db:
             mock_db.return_value.test_connection.return_value = True
             result = runner.invoke(main, ['check-maintenance', '--help'])
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Target node to analyze for decommissioning' in result.output
             assert 'min-availability' in result.output
 
@@ -152,7 +152,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'nonexistent-node', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'not found in cluster' in result.output
             assert 'Available nodes:' in result.output
 
@@ -164,7 +164,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'safe to decommission' in result.output
 
     def test_full_maintenance_analysis(self, runner, mock_client, 
@@ -185,7 +185,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Maintenance Analysis Summary' in result.output
             assert 'Total Shards on Node: 3' in result.output
             assert 'Data to Move:' in result.output
@@ -209,7 +209,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'primaries'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Maintenance Analysis Summary' in result.output
             assert 'Fast Operations:' in result.output
             assert 'Slow Operations:' in result.output
@@ -232,7 +232,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Recovery Time Estimation' in result.output
             assert 'Recovery Settings:' in result.output
             assert 'Max bytes/sec:' in result.output
@@ -256,7 +256,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Target Nodes Capacity' in result.output
             assert 'Zone: us-west-2c' in result.output
             assert 'Space Below Low WM' in result.output
@@ -280,7 +280,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'primaries'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             assert 'Next Steps:' in result.output
             assert 'Verify cluster health' in result.output
             assert 'xmover monitor-recovery --watch' in result.output
@@ -303,7 +303,7 @@ class TestCheckMaintenanceCommand:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             # Should show data-hot-5 but NOT master-1 even though both are in us-west-2c
             assert 'data-hot-5' in result.output
             assert 'master-1' not in result.output
@@ -445,7 +445,7 @@ class TestMaintenanceCommandsClass:
         with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'node-1', '--min-availability', 'full'])
             
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
             # Should detect isolated node scenario
             assert 'CRITICAL: Data cannot be moved - no target nodes in same availability zone' in result.output
             assert 'Target node is isolated in zone' in result.output

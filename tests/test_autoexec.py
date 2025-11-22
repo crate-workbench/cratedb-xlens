@@ -410,7 +410,7 @@ class TestCLIIntegration:
 
             result = runner.invoke(main, ['problematic-translogs', '--autoexec'])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
 
             # Verify maintenance command was called with autoexec=True
             call_args = mock_maintenance.problematic_translogs.call_args[0]
@@ -434,7 +434,7 @@ class TestCLIIntegration:
                 '--dry-run'
             ])
 
-            assert result.exit_code == 0
+            assert result.exit_code == 0, result.output
 
             # Verify dry_run was passed correctly
             call_args = mock_maintenance.problematic_translogs.call_args[0]
