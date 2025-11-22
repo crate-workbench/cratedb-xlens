@@ -383,7 +383,7 @@ class TestShardDistributionCommand:
     
     def test_shard_distribution_basic(self, runner, mock_successful_connection):
         """Test basic shard-distribution command"""
-        with patch('cratedb_xlens.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.commands.maintenance.shard_distribution.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_largest_tables_distribution.return_value = []
             mock_analyzer.return_value = mock_analyzer_instance
@@ -394,23 +394,25 @@ class TestShardDistributionCommand:
     
     def test_shard_distribution_with_top_tables(self, runner, mock_successful_connection):
         """Test shard-distribution with custom top tables count"""
-        with patch('cratedb_xlens.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.commands.maintenance.shard_distribution.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_largest_tables_distribution.return_value = []
             mock_analyzer.return_value = mock_analyzer_instance
             
             result = runner.invoke(main, ['shard-distribution', '--top-tables', '20'])
             assert result.exit_code == 0
-    
+            mock_analyzer_instance.get_largest_tables_distribution.assert_called()
+
     def test_shard_distribution_with_specific_table(self, runner, mock_successful_connection):
         """Test shard-distribution with specific table"""
-        with patch('cratedb_xlens.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.commands.maintenance.shard_distribution.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_table_distribution_detailed.return_value = None
             mock_analyzer.return_value = mock_analyzer_instance
             
             result = runner.invoke(main, ['shard-distribution', '--table', 'test_table'])
             assert result.exit_code == 0
+            mock_analyzer_instance.get_table_distribution_detailed.assert_called()
 
 
 class TestZoneAnalysisCommand:
