@@ -24,7 +24,7 @@ jobs:
       matrix:
         os: [
           "ubuntu-24.04",
-          "ubuntu-24.04-arm",
+          # "ubuntu-24.04-arm",  # Only available for public repositories.
         ]
         python-version: [
           "3.10",
