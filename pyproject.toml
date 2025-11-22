@@ -85,7 +85,7 @@ docs = [
     "sphinx-autobuild>=2024",
     "sphinx-copybutton",
     "sphinx-design-elements<1",
-    "sphinxcontrib-mermaid<1",
+    "sphinxcontrib-mermaid<2",
     "sphinxext-opengraph<1",
 ]
 
