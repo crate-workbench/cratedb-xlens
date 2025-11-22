@@ -84,7 +84,7 @@ class TestPartitionAwareOperationsDisplay:
         mock_analyzer = Mock()
         mock_analyzer.shards = partitioned_shards
 
-        with patch('xmover.commands.operations.ShardAnalyzer') as mock_analyzer_class:
+        with patch('cratedb_xlens.commands.operations.ShardAnalyzer') as mock_analyzer_class:
             mock_analyzer_class.return_value = mock_analyzer
             command = OperationsCommands(mock_client)
             return command, mock_analyzer
