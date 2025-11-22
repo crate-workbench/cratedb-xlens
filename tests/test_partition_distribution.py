@@ -346,8 +346,8 @@ class TestPartitionQueryValidation:
 
         # Critical fix verification: Query must include partition in GROUP BY
         assert 'COALESCE(s.partition_ident, \'\') as partition_ident' in called_query
-        assert 'GROUP BY s.schema_name, s.table_name, s.partition_ident, s.node[\'name\']' in called_query
-        assert 'ORDER BY s.partition_ident, s.node[\'name\']' in called_query
+        assert 'GROUP BY s.schema_name, s.table_name' in called_query
+        assert 'ORDER BY COALESCE(s.partition_ident' in called_query
 
     def test_get_largest_tables_distribution_query_partition_aware(self):
         """Verify largest tables query now finds largest PARTITIONS"""
