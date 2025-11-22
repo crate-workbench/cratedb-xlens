@@ -295,7 +295,7 @@ class TestPercentageFilteringWithAdaptiveThresholds:
 class TestMultipleTableProcessing:
     """Test processing multiple tables with mixed success/failure scenarios"""
 
-    @patch('cratedb_xlens.commands.maintenance.TableResetProcessor')
+    @patch('cratedb_xlens.commands.maintenance.problematic_translogs.autoexec.TableResetProcessor')
     def test_partial_failure_returns_correct_exit_code(self, mock_processor_class, mock_client):
         """Test that partial failures (some succeed, some fail) return exit code 3"""
         # Create mock processors - first succeeds, second fails
@@ -325,7 +325,7 @@ class TestMultipleTableProcessing:
         assert result is False
         assert maintenance._get_autoexec_exit_code() == 3  # Partial failure
 
-    @patch('cratedb_xlens.commands.maintenance.TableResetProcessor')
+    @patch('cratedb_xlens.commands.maintenance.problematic_translogs.autoexec.TableResetProcessor')
     def test_complete_failure_returns_exit_code_2(self, mock_processor_class, mock_client):
         """Test that complete failure (all tables fail) returns exit code 2"""
         mock_processor = Mock()
