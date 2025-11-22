@@ -329,7 +329,8 @@ class TestGetMasterNodeIdMethod:
         """Test successful retrieval of master node ID"""
         
         with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
-            mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
+            # FIXME: This satisfies `int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))` in `database.py`.
+            mock_getenv.return_value = '2'
             
             client = CrateDBClient()
             
@@ -342,7 +343,7 @@ class TestGetMasterNodeIdMethod:
                 master_id = client.get_master_node_id()
                 assert master_id == 'zhMDxEagTgapM34lDaXk1g'
                 
-                # Verify correct query was executed
+                # Verify the correct query was executed
                 expected_query = "\n        SELECT master_node FROM sys.cluster\n        "
                 mock_execute.assert_called_once_with(expected_query)
 
@@ -350,8 +351,9 @@ class TestGetMasterNodeIdMethod:
         """Test handling when no master node results are returned"""
         
         with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
-            mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
-            
+            # FIXME: This satisfies `int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))` in `database.py`.
+            mock_getenv.return_value = '2'
+
             client = CrateDBClient()
             
             # Mock the execute_query method to return empty results
@@ -365,7 +367,8 @@ class TestGetMasterNodeIdMethod:
         """Test handling when master node result is null"""
         
         with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
-            mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
+            # FIXME: This satisfies `int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))` in `database.py`.
+            mock_getenv.return_value = '2'
             
             client = CrateDBClient()
             
@@ -380,7 +383,8 @@ class TestGetMasterNodeIdMethod:
         """Test handling when query execution raises an exception"""
         
         with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
-            mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
+            # FIXME: This satisfies `int(os.getenv('CRATE_QUERY_TIMEOUT', '30'))` in `database.py`.
+            mock_getenv.return_value = '2'
             
             client = CrateDBClient()
             
