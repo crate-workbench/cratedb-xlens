@@ -14,8 +14,8 @@ from typing import Dict, List, Any
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from xmover.database import CrateDBClient, RecoveryInfo
-from xmover.analyzer import RecoveryMonitor
+from cratedb_xlens.database import CrateDBClient, RecoveryInfo
+from cratedb_xlens.analyzer import RecoveryMonitor
 
 
 def create_mock_allocation(schema_name: str, table_name: str, shard_id: int,

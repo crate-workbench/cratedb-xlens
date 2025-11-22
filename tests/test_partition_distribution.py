@@ -10,9 +10,9 @@ Tests the critical fixes identified in Phase 4 audit:
 
 import pytest
 from unittest.mock import Mock, patch
-from xmover.distribution_analyzer import DistributionAnalyzer, TableDistribution, DistributionAnomaly
-from xmover.analyzer import ShardAnalyzer
-from xmover.database import ShardInfo, NodeInfo
+from cratedb_xlens.distribution_analyzer import DistributionAnalyzer, TableDistribution, DistributionAnomaly
+from cratedb_xlens.analyzer import ShardAnalyzer
+from cratedb_xlens.database import ShardInfo, NodeInfo
 
 
 class TestPartitionAwareDistributionAnalyzer:

@@ -16,8 +16,8 @@ from unittest.mock import Mock, patch, MagicMock, call
 from io import StringIO
 import sys
 
-from xmover.database import CrateDBClient, NodeInfo
-from xmover.commands.diagnostics import DiagnosticsCommands
+from cratedb_xlens.database import CrateDBClient, NodeInfo
+from cratedb_xlens.commands.diagnostics import DiagnosticsCommands
 from rich.console import Console
 
 
@@ -27,7 +27,7 @@ class TestCrateDB500ErrorScenarios:
     def test_sys_nodes_null_pointer_exception_scenario(self):
         """Test the exact scenario that caused the original 500 error"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         # Mock the exact error that occurred in production
@@ -115,7 +115,7 @@ class TestCrateDB500ErrorScenarios:
     def test_bulk_sys_nodes_query_failure_vs_individual_success(self):
         """Test that individual node queries succeed when bulk query fails"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -143,7 +143,7 @@ class TestCrateDB500ErrorScenarios:
     def test_multiple_corrupted_nodes_in_cluster(self):
         """Test handling of multiple nodes with corrupted metadata simultaneously"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -199,7 +199,7 @@ class TestCrateDB500ErrorScenarios:
     def test_coalesce_handling_prevents_null_errors(self):
         """Test that COALESCE statements prevent NULL-related errors"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -227,7 +227,7 @@ class TestCrateDB500ErrorScenarios:
     def test_cluster_health_summary_resilience(self):
         """Test cluster health summary query resilience to sys.health issues"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -292,7 +292,7 @@ class TestCrateDB500ErrorScenarios:
     def test_production_error_logging_format(self, mock_print):
         """Test that error logging matches the production format from the summary"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -325,7 +325,7 @@ class TestSQLQueryRobustness:
     def test_individual_node_query_pattern(self):
         """Test the individual node query pattern that prevents cascading failures"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -363,7 +363,7 @@ class TestSQLQueryRobustness:
     def test_cluster_health_query_structure(self):
         """Test that cluster health query handles potential sys.health issues"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -438,7 +438,7 @@ class TestProductionScenarioReplication:
     def test_exact_production_cluster_scenario(self):
         """Test the exact production scenario with 11 nodes, 3 zones"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         # Replicate exact production cluster setup

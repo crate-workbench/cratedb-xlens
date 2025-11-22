@@ -5,9 +5,9 @@ Tests for problematic translogs functionality with replica management
 import pytest
 from unittest.mock import Mock, patch
 from click.testing import CliRunner
-from xmover.cli import main
-from xmover.commands.maintenance import MaintenanceCommands
-from xmover.database import CrateDBClient
+from cratedb_xlens.cli import main
+from cratedb_xlens.commands.maintenance import MaintenanceCommands
+from cratedb_xlens.database import CrateDBClient
 
 
 class TestProblematicTranslogs:
@@ -38,7 +38,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             # Use default 512MB threshold
             result = self.runner.invoke(main, ['problematic-translogs'])
 
@@ -51,7 +51,7 @@ class TestProblematicTranslogs:
         self.mock_client.execute_query.return_value = {'rows': []}
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--sizeMB', '300'])
 
         assert result.exit_code == 0
@@ -87,7 +87,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client_class.return_value = self.mock_client
             result = self.runner.invoke(main, ['problematic-translogs', '--sizeMB', '300', '--execute'])
 
@@ -130,7 +130,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--sizeMB', '300', '--execute'])
 
         assert result.exit_code == 0
@@ -177,7 +177,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--sizeMB', '200'])
 
         assert result.exit_code == 0
@@ -199,7 +199,7 @@ class TestProblematicTranslogs:
         self.mock_client.execute_query.return_value = {'rows': []}
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--sizeMB', '500'])
 
         # Verify the query was called twice (individual shards + summary)
@@ -236,7 +236,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--execute'])
 
         assert result.exit_code == 0
@@ -268,7 +268,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--execute'])
 
         assert result.exit_code == 0
@@ -304,7 +304,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--execute'])
 
         assert result.exit_code == 0
@@ -342,7 +342,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs', '--execute'])
 
         assert result.exit_code == 0
@@ -371,7 +371,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0
@@ -401,7 +401,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0
@@ -414,7 +414,7 @@ class TestProblematicTranslogs:
         self.mock_client.execute_query.side_effect = Exception("Connection failed")
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0
@@ -426,7 +426,7 @@ class TestProblematicTranslogs:
         self.mock_client.execute_query.return_value = {'rows': []}
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0
@@ -466,7 +466,7 @@ class TestProblematicTranslogs:
         ]
         self.mock_client.test_connection.return_value = True
 
-        with patch('xmover.cli.CrateDBClient', return_value=self.mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=self.mock_client):
             result = self.runner.invoke(main, ['problematic-translogs'])
 
         assert result.exit_code == 0

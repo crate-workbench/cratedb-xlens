@@ -4,7 +4,7 @@ Test watermark utility functions for dynamic disk usage thresholds
 
 import pytest
 from unittest.mock import Mock
-from xmover.utils import (
+from cratedb_xlens.utils import (
     parse_watermark_percentage, 
     get_effective_disk_usage_threshold, 
     calculate_watermark_remaining_space

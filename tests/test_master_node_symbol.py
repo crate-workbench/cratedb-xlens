@@ -13,8 +13,8 @@ import pytest
 from unittest.mock import Mock, patch
 from io import StringIO
 
-from xmover.database import CrateDBClient, NodeInfo
-from xmover.commands.diagnostics import DiagnosticsCommands
+from cratedb_xlens.database import CrateDBClient, NodeInfo
+from cratedb_xlens.commands.diagnostics import DiagnosticsCommands
 from rich.console import Console
 
 
@@ -328,7 +328,7 @@ class TestGetMasterNodeIdMethod:
     def test_get_master_node_id_success(self):
         """Test successful retrieval of master node ID"""
         
-        with patch('xmover.database.os.getenv') as mock_getenv:
+        with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
             mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
             
             client = CrateDBClient()
@@ -349,7 +349,7 @@ class TestGetMasterNodeIdMethod:
     def test_get_master_node_id_no_results(self):
         """Test handling when no master node results are returned"""
         
-        with patch('xmover.database.os.getenv') as mock_getenv:
+        with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
             mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
             
             client = CrateDBClient()
@@ -364,7 +364,7 @@ class TestGetMasterNodeIdMethod:
     def test_get_master_node_id_null_result(self):
         """Test handling when master node result is null"""
         
-        with patch('xmover.database.os.getenv') as mock_getenv:
+        with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
             mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
             
             client = CrateDBClient()
@@ -379,7 +379,7 @@ class TestGetMasterNodeIdMethod:
     def test_get_master_node_id_exception_handling(self):
         """Test handling when query execution raises an exception"""
         
-        with patch('xmover.database.os.getenv') as mock_getenv:
+        with patch('cratedb_xlens.database.os.getenv') as mock_getenv:
             mock_getenv.return_value = 'postgresql://test:test@localhost:4200'
             
             client = CrateDBClient()

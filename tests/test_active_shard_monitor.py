@@ -5,8 +5,8 @@ Tests for ActiveShardMonitor functionality
 import pytest
 import time
 from unittest.mock import Mock, patch
-from xmover.database import CrateDBClient, ActiveShardSnapshot, ActiveShardActivity
-from xmover.analyzer import ActiveShardMonitor
+from cratedb_xlens.database import CrateDBClient, ActiveShardSnapshot, ActiveShardActivity
+from cratedb_xlens.analyzer import ActiveShardMonitor
 
 
 class TestActiveShardSnapshot:

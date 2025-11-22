@@ -9,7 +9,7 @@ Install dev dependencies with: uv sync
 import pytest
 import os
 from unittest.mock import Mock, patch
-from xmover.database import CrateDBClient
+from cratedb_xlens.database import CrateDBClient
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -124,7 +124,7 @@ def sample_node_stats():
 @pytest.fixture(autouse=True)
 def mock_env_file():
     """Mock the .env file loading"""
-    with patch('xmover.database.load_dotenv'):
+    with patch('cratedb_xlens.database.load_dotenv'):
         yield
 
 

@@ -6,7 +6,7 @@ that were added to support the partition-aware functionality.
 """
 
 import pytest
-from xmover.utils import (
+from cratedb_xlens.utils import (
     parse_table_partition_identifier,
     format_table_identifier_with_partition,
     format_partition_display,

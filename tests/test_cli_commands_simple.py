@@ -6,7 +6,7 @@ Focus on basic command execution without deep mocking
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from click.testing import CliRunner
-from xmover.cli import main
+from cratedb_xlens.cli import main
 
 
 @pytest.fixture
@@ -126,118 +126,118 @@ class TestBasicCommandExecution:
     
     def test_analyze_command(self, runner, mock_client, mock_analyzer):
         """Test analyze command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze'])
                 assert result.exit_code == 0
     
     def test_analyze_with_table(self, runner, mock_client, mock_analyzer):
         """Test analyze with table filter"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--table', 'test_table'])
                 assert result.exit_code == 0
     
     def test_analyze_with_largest(self, runner, mock_client, mock_analyzer):
         """Test analyze with largest option"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--largest', '5'])
                 assert result.exit_code == 0
     
     def test_test_connection_command(self, runner, mock_client):
         """Test test-connection command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['test-connection'])
             assert result.exit_code == 0
     
     def test_test_connection_with_custom_string(self, runner, mock_client):
         """Test test-connection with custom connection string"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['test-connection', '--connection-string', 'custom://connection'])
             assert result.exit_code == 0
     
     def test_monitor_recovery_command(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 result = runner.invoke(main, ['monitor-recovery'])
                 assert result.exit_code == 0
     
     def test_monitor_recovery_with_options(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery with options"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 result = runner.invoke(main, ['monitor-recovery', '--include-transitioning'])
                 assert result.exit_code == 0
     
     def test_problematic_translogs_command(self, runner, mock_client, mock_analyzer):
         """Test problematic-translogs command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['problematic-translogs'])
                 assert result.exit_code == 0
     
     def test_problematic_translogs_with_size(self, runner, mock_client, mock_analyzer):
         """Test problematic-translogs with sizeMB option"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['problematic-translogs', '--sizeMB', '520'])
                 assert result.exit_code == 0
     
     def test_deep_analyze_command(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze'])
                 assert result.exit_code == 0
     
     def test_deep_analyze_with_schema(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze with schema option"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze', '--schema', 'test_schema'])
                 assert result.exit_code == 0
     
     def test_large_translogs_command(self, runner, mock_client, mock_analyzer):
         """Test large-translogs command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['large-translogs'])
                 assert result.exit_code == 0
     
     def test_large_translogs_with_options(self, runner, mock_client, mock_analyzer):
         """Test large-translogs with options"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['large-translogs', '--translogsize', '1000', '--table', 'test_table'])
                 assert result.exit_code == 0
     
     def test_shard_distribution_command(self, runner, mock_client, mock_distribution_analyzer):
         """Test shard-distribution command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
                 result = runner.invoke(main, ['shard-distribution'])
                 assert result.exit_code == 0
     
     def test_shard_distribution_with_options(self, runner, mock_client, mock_distribution_analyzer):
         """Test shard-distribution with options"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
                 result = runner.invoke(main, ['shard-distribution', '--top-tables', '15', '--table', 'test_table'])
                 assert result.exit_code == 0
     
     def test_zone_analysis_command(self, runner, mock_client, mock_analyzer):
         """Test zone-analysis command executes"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['zone-analysis'])
                 assert result.exit_code == 0
     
     def test_zone_analysis_with_options(self, runner, mock_client, mock_analyzer):
         """Test zone-analysis with options"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['zone-analysis', '--table', 'test_table', '--show-shards'])
                 assert result.exit_code == 0
 
@@ -274,13 +274,13 @@ class TestErrorHandling:
         mock_client = Mock()
         mock_client.test_connection.return_value = False
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['analyze'])
             assert result.exit_code == 1
     
     def test_connection_exception(self, runner):
         """Test connection exception handling"""
-        with patch('xmover.cli.CrateDBClient', side_effect=Exception("Connection failed")):
+        with patch('cratedb_xlens.cli.CrateDBClient', side_effect=Exception("Connection failed")):
             result = runner.invoke(main, ['analyze'])
             assert result.exit_code == 1
     
@@ -300,16 +300,16 @@ class TestWatchModeHandling:
     
     def test_monitor_recovery_watch_mode(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery watch mode exits gracefully"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 with patch('time.sleep', side_effect=KeyboardInterrupt):
                     result = runner.invoke(main, ['monitor-recovery', '--watch'])
                     assert result.exit_code == 0
     
     def test_large_translogs_watch_mode(self, runner, mock_client, mock_analyzer):
         """Test large-translogs watch mode exits gracefully"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 with patch('time.sleep', side_effect=KeyboardInterrupt):
                     result = runner.invoke(main, ['large-translogs', '--watch'])
                     assert result.exit_code == 0
@@ -320,15 +320,15 @@ class TestSpecificScenarios:
     
     def test_analyze_enhanced_features(self, runner, mock_client, mock_analyzer):
         """Test analyze with enhanced features (branch-specific)"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['analyze', '--largest', '10', '--no-zero-size'])
                 assert result.exit_code == 0
     
     def test_monitor_recovery_include_transitioning_watch(self, runner, mock_client, mock_recovery_monitor):
         """Test monitor-recovery with include-transitioning in watch mode"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor', return_value=mock_recovery_monitor):
                 with patch('time.sleep', side_effect=KeyboardInterrupt):
                     result = runner.invoke(main, [
                         'monitor-recovery', 
@@ -339,35 +339,35 @@ class TestSpecificScenarios:
     
     def test_problematic_translogs_sizeMB_520(self, runner, mock_client, mock_analyzer):
         """Test problematic-translogs --sizeMB 520"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['problematic-translogs', '--sizeMB', '520'])
                 assert result.exit_code == 0
     
     def test_deep_analyze_basic(self, runner, mock_client, mock_shard_size_monitor):
         """Test deep-analyze basic functionality"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.commands.analysis.ShardSizeMonitor', return_value=mock_shard_size_monitor):
                 result = runner.invoke(main, ['deep-analyze'])
                 assert result.exit_code == 0
     
     def test_large_translogs_monitoring(self, runner, mock_client, mock_analyzer):
         """Test large-translogs monitoring"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['large-translogs', '--translogsize', '500'])
                 assert result.exit_code == 0
     
     def test_shard_distribution_analysis(self, runner, mock_client, mock_distribution_analyzer):
         """Test shard-distribution analysis"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.DistributionAnalyzer', return_value=mock_distribution_analyzer):
                 result = runner.invoke(main, ['shard-distribution', '--top-tables', '20'])
                 assert result.exit_code == 0
     
     def test_zone_analysis_comprehensive(self, runner, mock_client, mock_analyzer):
         """Test zone-analysis comprehensive"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
-            with patch('xmover.cli.ShardAnalyzer', return_value=mock_analyzer):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
+            with patch('cratedb_xlens.cli.ShardAnalyzer', return_value=mock_analyzer):
                 result = runner.invoke(main, ['zone-analysis', '--show-shards'])
                 assert result.exit_code == 0
