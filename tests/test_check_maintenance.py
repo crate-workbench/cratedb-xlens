@@ -9,8 +9,8 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from click.testing import CliRunner
 from types import SimpleNamespace
-from xmover.cli import main
-from xmover.commands.maintenance import MaintenanceCommands
+from cratedb_xlens.cli import main
+from cratedb_xlens.commands.maintenance import MaintenanceCommands
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ class TestCheckMaintenanceCommand:
 
     def test_command_registered(self, runner):
         """Test that check-maintenance command is properly registered"""
-        with patch('xmover.cli.CrateDBClient') as mock_db:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_db:
             mock_db.return_value.test_connection.return_value = True
             result = runner.invoke(main, ['--help'])
             assert result.exit_code == 0
@@ -123,7 +123,7 @@ class TestCheckMaintenanceCommand:
 
     def test_command_help(self, runner):
         """Test check-maintenance help displays correctly"""
-        with patch('xmover.cli.CrateDBClient') as mock_db:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_db:
             mock_db.return_value.test_connection.return_value = True
             result = runner.invoke(main, ['check-maintenance', '--help'])
             assert result.exit_code == 0
@@ -132,7 +132,7 @@ class TestCheckMaintenanceCommand:
 
     def test_missing_required_options(self, runner):
         """Test command fails with missing required options"""
-        with patch('xmover.cli.CrateDBClient') as mock_db:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_db:
             mock_db.return_value.test_connection.return_value = True
             
             # Missing both options
@@ -149,7 +149,7 @@ class TestCheckMaintenanceCommand:
 
     def test_invalid_node_name(self, runner, mock_client):
         """Test command handles invalid node names gracefully"""
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'nonexistent-node', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -161,7 +161,7 @@ class TestCheckMaintenanceCommand:
         # Mock empty shards result
         mock_client.execute_query.return_value = {'rows': []}
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -182,7 +182,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -206,7 +206,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'primaries'])
             
             assert result.exit_code == 0
@@ -229,7 +229,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -253,7 +253,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -277,7 +277,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'primaries'])
             
             assert result.exit_code == 0
@@ -300,7 +300,7 @@ class TestCheckMaintenanceCommand:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'data-hot-4', '--min-availability', 'full'])
             
             assert result.exit_code == 0
@@ -442,7 +442,7 @@ class TestMaintenanceCommandsClass:
         
         mock_client.execute_query.side_effect = mock_execute_query
         
-        with patch('xmover.cli.CrateDBClient', return_value=mock_client):
+        with patch('cratedb_xlens.cli.CrateDBClient', return_value=mock_client):
             result = runner.invoke(main, ['check-maintenance', '--node', 'node-1', '--min-availability', 'full'])
             
             assert result.exit_code == 0

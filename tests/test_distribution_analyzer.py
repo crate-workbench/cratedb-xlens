@@ -4,8 +4,8 @@ Tests for distribution analyzer functionality
 
 import pytest
 from unittest.mock import Mock, patch
-from xmover.distribution_analyzer import DistributionAnalyzer, TableDistribution, DistributionAnomaly
-from xmover.database import CrateDBClient, NodeInfo
+from cratedb_xlens.distribution_analyzer import DistributionAnalyzer, TableDistribution, DistributionAnomaly
+from cratedb_xlens.database import CrateDBClient, NodeInfo
 
 
 class TestDistributionAnalyzer:

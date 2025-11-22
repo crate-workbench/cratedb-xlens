@@ -13,8 +13,8 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from io import StringIO
 
-from xmover.database import CrateDBClient, NodeInfo
-from xmover.commands.diagnostics import DiagnosticsCommands
+from cratedb_xlens.database import CrateDBClient, NodeInfo
+from cratedb_xlens.commands.diagnostics import DiagnosticsCommands
 from rich.console import Console
 
 
@@ -104,7 +104,7 @@ class TestEnhancedTestConnectionMethods:
         cmd = DiagnosticsCommands(mock_client)
         cmd.console = console
         
-        with patch('xmover.database.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.database.CrateDBClient') as mock_client_class:
             mock_new_client = Mock(spec=CrateDBClient)
             mock_client_class.return_value = mock_new_client
             

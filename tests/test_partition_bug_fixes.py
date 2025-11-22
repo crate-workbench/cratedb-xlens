@@ -15,8 +15,8 @@ from unittest.mock import Mock, patch, MagicMock
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any
 
-from xmover.database import CrateDBClient, ShardInfo
-from xmover.analyzer import ShardAnalyzer, MoveRecommendation
+from cratedb_xlens.database import CrateDBClient, ShardInfo
+from cratedb_xlens.analyzer import ShardAnalyzer, MoveRecommendation
 
 
 class TestPartitionBugFixes:

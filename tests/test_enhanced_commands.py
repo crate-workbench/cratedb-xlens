@@ -8,8 +8,8 @@ import json
 import time
 from unittest.mock import Mock, patch, MagicMock, call
 from click.testing import CliRunner
-from xmover.cli import main
-from xmover.database import CrateDBClient
+from cratedb_xlens.cli import main
+from cratedb_xlens.database import CrateDBClient
 
 
 class TestEnhancedAnalyzeCommand:
@@ -17,12 +17,12 @@ class TestEnhancedAnalyzeCommand:
 
     def test_analyze_with_partition_handling(self, cli_runner):
         """Test analyze command handles partitioned tables correctly"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer') as mock_analyzer:
                 mock_analyzer_instance = Mock()
                 # Mock cluster overview and table size breakdown with proper data types
                 mock_analyzer_instance.get_cluster_overview.return_value = {
@@ -71,7 +71,7 @@ class TestEnhancedAnalyzeCommand:
 
     def test_analyze_no_zero_size_filtering(self, cli_runner):
         """Test analyze command with no-zero-size filtering"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -87,12 +87,12 @@ class TestEnhancedMonitorRecoveryCommand:
 
     def test_monitor_recovery_with_all_options(self, cli_runner):
         """Test monitor-recovery with include-transitioning and watch mode"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor') as mock_monitor:
                 with patch('time.sleep') as mock_sleep:
                     mock_monitor_instance = Mock()
                     mock_monitor_instance.get_cluster_recovery_status.return_value = [
@@ -124,12 +124,12 @@ class TestEnhancedMonitorRecoveryCommand:
 
     def test_monitor_recovery_recovery_type_filtering(self, cli_runner):
         """Test monitor-recovery with specific recovery type filtering"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
+            with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor') as mock_monitor:
                 mock_monitor_instance = Mock()
                 mock_monitor_instance.get_cluster_recovery_status.return_value = []
                 mock_monitor.return_value = mock_monitor_instance
@@ -146,7 +146,7 @@ class TestEnhancedProblematicTranslogsCommand:
 
     def test_problematic_translogs_comprehensive_workflow(self, cli_runner):
         """Test problematic-translogs with comprehensive shard management"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -157,7 +157,7 @@ class TestEnhancedProblematicTranslogsCommand:
 
     def test_problematic_translogs_partition_handling(self, cli_runner):
         """Test problematic-translogs handles partitioned tables correctly"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -168,7 +168,7 @@ class TestEnhancedProblematicTranslogsCommand:
 
     def test_problematic_translogs_execute_with_confirmation(self, cli_runner):
         """Test problematic-translogs execute flag with user confirmation"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client.execute.return_value = True
@@ -184,13 +184,13 @@ class TestEnhancedDeepAnalyzeCommand:
 
     def test_deep_analyze_with_rules_file(self, cli_runner):
         """Test deep-analyze with custom rules file"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.shard_size_monitor.validate_rules_file', return_value=True):
-                with patch('xmover.commands.analysis.ShardSizeMonitor') as mock_monitor:
+            with patch('cratedb_xlens.shard_size_monitor.validate_rules_file', return_value=True):
+                with patch('cratedb_xlens.commands.analysis.ShardSizeMonitor') as mock_monitor:
                     mock_monitor_instance = Mock()
                     mock_monitor_instance.analyze_all_schemas.return_value = {
                         'violations': [
@@ -210,12 +210,12 @@ class TestEnhancedDeepAnalyzeCommand:
 
     def test_deep_analyze_export_csv(self, cli_runner):
         """Test deep-analyze with CSV export functionality"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.analysis.ShardSizeMonitor') as mock_monitor:
+            with patch('cratedb_xlens.commands.analysis.ShardSizeMonitor') as mock_monitor:
                 with patch('builtins.open', create=True) as mock_open:
                     mock_monitor_instance = Mock()
                     mock_monitor_instance.analyze_all_schemas.return_value = {
@@ -242,7 +242,7 @@ class TestEnhancedLargeTranslogsCommand:
 
     def test_large_translogs_comprehensive_monitoring(self, cli_runner):
         """Test large-translogs with comprehensive monitoring options"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -253,7 +253,7 @@ class TestEnhancedLargeTranslogsCommand:
 
     def test_large_translogs_watch_mode_comprehensive(self, cli_runner):
         """Test large-translogs watch mode with all options"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -268,12 +268,12 @@ class TestEnhancedShardDistributionCommand:
 
     def test_shard_distribution_anomaly_detection(self, cli_runner):
         """Test shard-distribution anomaly detection capabilities"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
+            with patch('cratedb_xlens.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
                 mock_analyzer_instance = Mock()
                 mock_analyzer_instance.get_largest_tables_distribution.return_value = []
                 mock_analyzer.return_value = mock_analyzer_instance
@@ -291,7 +291,7 @@ class TestEnhancedZoneAnalysisCommand:
 
     def test_zone_analysis_comprehensive(self, cli_runner):
         """Test zone-analysis with comprehensive zone distribution analysis"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -310,12 +310,12 @@ class TestCommandIntegration:
 
     def test_analyze_to_problematic_translogs_workflow(self, cli_runner):
         """Test workflow from analyze to problematic-translogs"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
+            with patch('cratedb_xlens.commands.analysis.ShardAnalyzer') as mock_analyzer:
                 mock_analyzer_instance = Mock()
                 # Mock cluster overview and table size breakdown
                 mock_analyzer_instance.get_cluster_overview.return_value = {
@@ -371,7 +371,7 @@ class TestCommandIntegration:
         # Test that help commands work to verify command registration
         commands_to_test = ['analyze', 'large-translogs', 'monitor-recovery', 'deep-analyze']
 
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client

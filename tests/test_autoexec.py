@@ -13,10 +13,10 @@ import pytest
 from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
-from xmover.commands.maintenance import MaintenanceCommands
-from xmover.commands.maintenance.problematic_translogs.autoexec import TableResetProcessor, TableResetState
-from xmover.database import CrateDBClient
-from xmover.cli import main
+from cratedb_xlens.commands.maintenance import MaintenanceCommands
+from cratedb_xlens.commands.maintenance.problematic_translogs.autoexec import TableResetProcessor, TableResetState
+from cratedb_xlens.database import CrateDBClient
+from cratedb_xlens.cli import main
 
 
 # ============================================================================
@@ -295,7 +295,7 @@ class TestPercentageFilteringWithAdaptiveThresholds:
 class TestMultipleTableProcessing:
     """Test processing multiple tables with mixed success/failure scenarios"""
 
-    @patch('xmover.commands.maintenance.TableResetProcessor')
+    @patch('cratedb_xlens.commands.maintenance.TableResetProcessor')
     def test_partial_failure_returns_correct_exit_code(self, mock_processor_class, mock_client):
         """Test that partial failures (some succeed, some fail) return exit code 3"""
         # Create mock processors - first succeeds, second fails
@@ -325,7 +325,7 @@ class TestMultipleTableProcessing:
         assert result is False
         assert maintenance._get_autoexec_exit_code() == 3  # Partial failure
 
-    @patch('xmover.commands.maintenance.TableResetProcessor')
+    @patch('cratedb_xlens.commands.maintenance.TableResetProcessor')
     def test_complete_failure_returns_exit_code_2(self, mock_processor_class, mock_client):
         """Test that complete failure (all tables fail) returns exit code 2"""
         mock_processor = Mock()
@@ -371,7 +371,7 @@ class TestCLIIntegration:
 
     def test_autoexec_and_execute_flags_mutually_exclusive(self, runner):
         """Test that --autoexec and --execute cannot be used together"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
 
             result = runner.invoke(main, [
@@ -385,7 +385,7 @@ class TestCLIIntegration:
 
     def test_dry_run_requires_autoexec(self, runner):
         """Test that --dry-run flag requires --autoexec"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client_class.return_value.test_connection.return_value = True
 
             result = runner.invoke(main, [
@@ -398,8 +398,8 @@ class TestCLIIntegration:
 
     def test_autoexec_basic_invocation(self, runner):
         """Test basic --autoexec invocation with default parameters"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class, \
-             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class, \
+             patch('cratedb_xlens.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
 
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -418,8 +418,8 @@ class TestCLIIntegration:
 
     def test_dry_run_with_autoexec(self, runner):
         """Test --autoexec with --dry-run flag combination"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class, \
-             patch('xmover.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class, \
+             patch('cratedb_xlens.commands.maintenance.MaintenanceCommands') as mock_maintenance_class:
 
             mock_client = Mock()
             mock_client.test_connection.return_value = True

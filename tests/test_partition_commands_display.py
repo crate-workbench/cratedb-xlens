@@ -15,12 +15,12 @@ from rich.table import Table
 from rich.console import Console
 from io import StringIO
 
-from xmover.commands.operations import OperationsCommands
-from xmover.commands.analysis import AnalysisCommands
-from xmover.formatting.tables import RichTableFormatter
-from xmover.database import ShardInfo, NodeInfo
-from xmover.distribution_analyzer import TableDistribution
-from xmover.analyzer import ShardAnalyzer
+from cratedb_xlens.commands.operations import OperationsCommands
+from cratedb_xlens.commands.analysis import AnalysisCommands
+from cratedb_xlens.formatting.tables import RichTableFormatter
+from cratedb_xlens.database import ShardInfo, NodeInfo
+from cratedb_xlens.distribution_analyzer import TableDistribution
+from cratedb_xlens.analyzer import ShardAnalyzer
 
 
 class TestPartitionAwareOperationsDisplay:

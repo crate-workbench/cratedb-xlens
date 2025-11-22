@@ -13,8 +13,8 @@ from unittest.mock import Mock, patch, call
 from io import StringIO
 import sys
 
-from xmover.database import CrateDBClient, NodeInfo
-from xmover.commands.diagnostics import DiagnosticsCommands
+from cratedb_xlens.database import CrateDBClient, NodeInfo
+from cratedb_xlens.commands.diagnostics import DiagnosticsCommands
 from rich.console import Console
 
 
@@ -25,7 +25,7 @@ class TestNodeMetadataHandling:
         """Test that get_nodes_info gracefully handles nodes with NULL/missing metadata"""
         
         # Create real client instance and patch execute_query
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -101,7 +101,7 @@ class TestNodeMetadataHandling:
     def test_get_nodes_info_multiple_corrupted_nodes(self):
         """Test handling multiple nodes with corrupted metadata"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -150,7 +150,7 @@ class TestNodeMetadataHandling:
     def test_get_nodes_info_no_corrupted_nodes(self):
         """Test normal operation when all nodes are healthy"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -192,7 +192,7 @@ class TestNodeMetadataHandling:
     def test_get_nodes_info_empty_node_list(self):
         """Test handling when no nodes are returned"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -207,7 +207,7 @@ class TestNodeMetadataHandling:
     def test_get_nodes_info_node_names_query_fails(self):
         """Test handling when the initial node names query fails"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -313,7 +313,7 @@ class TestNodeMetadataHandling:
     def test_node_metadata_warning_format(self, mock_print):
         """Test the exact format of node metadata warning messages"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -336,7 +336,7 @@ class TestNodeMetadataHandling:
     def test_fallback_node_values_are_safe(self):
         """Test that fallback values prevent division by zero and other errors"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -427,7 +427,7 @@ class TestClusterHealthSummary:
     def test_get_cluster_health_summary_success(self):
         """Test successful cluster health summary retrieval"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -459,7 +459,7 @@ class TestClusterHealthSummary:
     def test_get_cluster_health_summary_with_issues(self):
         """Test cluster health summary with RED/YELLOW entities"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -482,7 +482,7 @@ class TestClusterHealthSummary:
     def test_get_cluster_health_summary_query_failure(self):
         """Test handling of cluster health query failure"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -768,7 +768,7 @@ class TestErrorHandlingRobustness:
     def test_get_nodes_info_individual_node_query_timeout(self):
         """Test handling of individual node query timeouts"""
         
-        from xmover.database import CrateDBClient
+        from cratedb_xlens.database import CrateDBClient
         client = CrateDBClient("crate://localhost:4200")
         
         with patch.object(client, 'execute_query') as mock_execute_query:
@@ -806,7 +806,7 @@ class TestErrorHandlingRobustness:
         """Test exception handling in main test_connection flow"""
         
         # Mock client that throws during initialization
-        with patch('xmover.database.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.database.CrateDBClient') as mock_client_class:
             mock_client_class.side_effect = Exception("Database initialization failed")
             
             console = Console(file=StringIO(), width=120, force_terminal=False)

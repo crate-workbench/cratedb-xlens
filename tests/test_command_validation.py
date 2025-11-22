@@ -6,7 +6,7 @@ Simple validation that all commands can be invoked and parse arguments correctly
 import pytest
 from unittest.mock import Mock, patch
 from click.testing import CliRunner
-from xmover.cli import main
+from cratedb_xlens.cli import main
 
 
 class TestCommandValidation:
@@ -20,7 +20,7 @@ class TestCommandValidation:
     @pytest.fixture
     def mock_successful_connection(self):
         """Mock successful database connection"""
-        with patch('xmover.cli.CrateDBClient') as mock_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_class:
             mock_instance = Mock()
             mock_instance.test_connection.return_value = True
             mock_class.return_value = mock_instance
@@ -87,7 +87,7 @@ class TestCommandValidation:
     
     def test_analyze_dry_run(self, runner, mock_successful_connection):
         """Test analyze command executes without errors"""
-        with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.commands.analysis.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_cluster_overview.return_value = {
                 'nodes': 3, 'zones': 2, 'total_shards': 100, 'primary_shards': 50,
@@ -111,7 +111,7 @@ class TestCommandValidation:
     
     def test_test_connection_dry_run(self, runner):
         """Test test-connection command executes without errors"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
@@ -121,7 +121,7 @@ class TestCommandValidation:
     
     def test_problematic_translogs_dry_run(self, runner, mock_successful_connection):
         """Test problematic-translogs command executes without errors"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.cli.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_problematic_translogs.return_value = []
             mock_analyzer.return_value = mock_instance
@@ -131,7 +131,7 @@ class TestCommandValidation:
     
     def test_monitor_recovery_dry_run(self, runner, mock_successful_connection):
         """Test monitor-recovery command executes without errors"""
-        with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
+        with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor') as mock_monitor:
             mock_instance = Mock()
             mock_instance.get_cluster_recovery_status.return_value = []
             mock_monitor.return_value = mock_instance
@@ -141,7 +141,7 @@ class TestCommandValidation:
     
     def test_deep_analyze_dry_run(self, runner, mock_successful_connection):
         """Test deep-analyze command executes without errors"""
-        with patch('xmover.cli.ShardSizeMonitor') as mock_monitor:
+        with patch('cratedb_xlens.cli.ShardSizeMonitor') as mock_monitor:
             mock_instance = Mock()
             mock_instance.analyze_all_schemas.return_value = {'violations': []}
             mock_monitor.return_value = mock_instance
@@ -151,7 +151,7 @@ class TestCommandValidation:
     
     def test_large_translogs_dry_run(self, runner, mock_successful_connection):
         """Test large-translogs command executes without errors"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.cli.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_large_translogs.return_value = []
             mock_analyzer.return_value = mock_instance
@@ -161,7 +161,7 @@ class TestCommandValidation:
     
     def test_shard_distribution_dry_run(self, runner, mock_successful_connection):
         """Test shard-distribution command executes without errors"""
-        with patch('xmover.cli.DistributionAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.cli.DistributionAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.analyze_distribution.return_value = {'analysis': {}}
             mock_analyzer.return_value = mock_instance
@@ -171,7 +171,7 @@ class TestCommandValidation:
     
     def test_zone_analysis_dry_run(self, runner, mock_successful_connection):
         """Test zone-analysis command executes without errors"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.cli.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.analyze_zones.return_value = {'zones': {}}
             mock_analyzer.return_value = mock_instance
@@ -186,7 +186,7 @@ class TestCommandValidation:
     
     def test_connection_failure_handling(self, runner):
         """Test that connection failures are handled gracefully"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_client_class:
             mock_client = Mock()
             mock_client.test_connection.return_value = False
             mock_client_class.return_value = mock_client
@@ -219,7 +219,7 @@ class TestSpecificCommandOptions:
     
     @pytest.fixture
     def mock_successful_connection(self):
-        with patch('xmover.cli.CrateDBClient') as mock_class:
+        with patch('cratedb_xlens.cli.CrateDBClient') as mock_class:
             mock_instance = Mock()
             mock_instance.test_connection.return_value = True
             mock_class.return_value = mock_instance
@@ -227,7 +227,7 @@ class TestSpecificCommandOptions:
     
     def test_analyze_options_validation(self, runner, mock_successful_connection):
         """Test analyze command option combinations"""
-        with patch('xmover.commands.analysis.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.commands.analysis.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_cluster_overview.return_value = {
                 'nodes': 3, 'zones': 2, 'total_shards': 100, 'primary_shards': 50,
@@ -272,7 +272,7 @@ class TestSpecificCommandOptions:
     
     def test_problematic_translogs_options(self, runner, mock_successful_connection):
         """Test problematic-translogs command options"""
-        with patch('xmover.cli.ShardAnalyzer') as mock_analyzer:
+        with patch('cratedb_xlens.cli.ShardAnalyzer') as mock_analyzer:
             mock_instance = Mock()
             mock_instance.get_problematic_translogs.return_value = []
             mock_analyzer.return_value = mock_instance
@@ -285,7 +285,7 @@ class TestSpecificCommandOptions:
     
     def test_monitor_recovery_options(self, runner, mock_successful_connection):
         """Test monitor-recovery command options"""
-        with patch('xmover.commands.monitoring.RecoveryMonitor') as mock_monitor:
+        with patch('cratedb_xlens.commands.monitoring.RecoveryMonitor') as mock_monitor:
             mock_instance = Mock()
             mock_instance.get_cluster_recovery_status.return_value = []
             mock_monitor.return_value = mock_instance
@@ -298,7 +298,7 @@ class TestSpecificCommandOptions:
     
     def test_deep_analyze_severity_options(self, runner, mock_successful_connection):
         """Test deep-analyze severity options"""
-        with patch('xmover.cli.ShardSizeMonitor') as mock_monitor:
+        with patch('cratedb_xlens.cli.ShardSizeMonitor') as mock_monitor:
             mock_instance = Mock()
             mock_instance.analyze_all_schemas.return_value = {'violations': []}
             mock_monitor.return_value = mock_instance
