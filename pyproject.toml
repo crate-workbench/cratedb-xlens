@@ -119,15 +119,24 @@ precision = 2
 directory = "htmlcov"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
 addopts = [
+    "-rA",
     "--strict-markers",
     "--strict-config",
-    "-ra",
+    "--verbosity=3",
+    "--cov",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    "--cov-branch",
 ]
+log_level = "DEBUG"
+log_cli_level = "DEBUG"
+log_format = "%(asctime)-15s [%(name)-24s] %(levelname)-8s: %(message)s"
+minversion = "2.0"
+testpaths = [
+  "tests",
+]
+xfail_strict = true
 markers = [
     "partition: partition-related functionality tests",
     "safety: critical safety tests",
