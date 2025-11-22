@@ -76,7 +76,7 @@ xmover = "cratedb_xlens.cli:main"
 [project.optional-dependencies]
 dev = [
     "poethepoet<1",
-    "pytest>=7,<8",
+    "pytest>=7,<10",
     "pytest-cov<8",
 ]
 docs = [
