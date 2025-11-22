@@ -273,7 +273,7 @@ class TestEnhancedShardDistributionCommand:
             mock_client.test_connection.return_value = True
             mock_client_class.return_value = mock_client
 
-            with patch('xmover.commands.maintenance.DistributionAnalyzer') as mock_analyzer:
+            with patch('xmover.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
                 mock_analyzer_instance = Mock()
                 mock_analyzer_instance.get_largest_tables_distribution.return_value = []
                 mock_analyzer.return_value = mock_analyzer_instance
