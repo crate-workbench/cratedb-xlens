@@ -45,7 +45,7 @@ class NodeMaintenanceCommand(BaseCommand):
     actionable recommendations.
     """
 
-    def check_maintenance(self, node: str, min_availability: str, short: bool = False):
+    def execute(self, node: str, min_availability: str, short: bool = False):
         """Check whether a node could be decommissioned and analyze shard movement requirements
 
         Args:
