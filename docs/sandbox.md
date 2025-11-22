@@ -10,7 +10,12 @@ uv venv --python 3.13 --seed .venv
 uv pip install --upgrade --editable='.[dev,docs]'
 ```
 
+## Software tests
+```shell
+uv run pytest
+```
+
 ## Documentation
 ```shell
-poe docs-autobuild
+uv run poe docs-autobuild
 ```
