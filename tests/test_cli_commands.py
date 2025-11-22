@@ -176,7 +176,7 @@ class TestTestConnectionCommand:
     
     def test_test_connection_success(self, runner):
         """Test successful connection test"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             # Mock both the main startup client and the command client
             mock_client = Mock()
             mock_client.test_connection.return_value = True
@@ -193,7 +193,7 @@ class TestTestConnectionCommand:
     
     def test_test_connection_failure(self, runner):
         """Test failed connection test"""
-        with patch('xmover.cli.CrateDBClient') as mock_client_class:
+        with patch('xmover.database.CrateDBClient') as mock_client_class:
             # Create different mocks for different calls
             call_count = 0
             def mock_test_connection():
@@ -383,7 +383,7 @@ class TestShardDistributionCommand:
     
     def test_shard_distribution_basic(self, runner, mock_successful_connection):
         """Test basic shard-distribution command"""
-        with patch('xmover.commands.maintenance.DistributionAnalyzer') as mock_analyzer:
+        with patch('xmover.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_largest_tables_distribution.return_value = []
             mock_analyzer.return_value = mock_analyzer_instance
@@ -394,7 +394,7 @@ class TestShardDistributionCommand:
     
     def test_shard_distribution_with_top_tables(self, runner, mock_successful_connection):
         """Test shard-distribution with custom top tables count"""
-        with patch('xmover.commands.maintenance.DistributionAnalyzer') as mock_analyzer:
+        with patch('xmover.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_largest_tables_distribution.return_value = []
             mock_analyzer.return_value = mock_analyzer_instance
@@ -404,7 +404,7 @@ class TestShardDistributionCommand:
     
     def test_shard_distribution_with_specific_table(self, runner, mock_successful_connection):
         """Test shard-distribution with specific table"""
-        with patch('xmover.commands.maintenance.DistributionAnalyzer') as mock_analyzer:
+        with patch('xmover.distribution_analyzer.DistributionAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer_instance.get_table_distribution_detailed.return_value = None
             mock_analyzer.return_value = mock_analyzer_instance
@@ -418,7 +418,7 @@ class TestZoneAnalysisCommand:
     
     def test_zone_analysis_basic(self, runner, mock_successful_connection):
         """Test basic zone-analysis command"""
-        with patch('xmover.commands.diagnostics.ShardAnalyzer') as mock_analyzer:
+        with patch('xmover.analyzer.ShardAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             # zone-analysis doesn't use ShardAnalyzer.analyze_zones, it has its own implementation
             # Just mock to return empty result for test
@@ -430,7 +430,7 @@ class TestZoneAnalysisCommand:
     
     def test_zone_analysis_with_table_filter(self, runner, mock_successful_connection):
         """Test zone-analysis with table filter"""
-        with patch('xmover.commands.diagnostics.ShardAnalyzer') as mock_analyzer:
+        with patch('xmover.analyzer.ShardAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer.return_value = mock_analyzer_instance
             
@@ -439,7 +439,7 @@ class TestZoneAnalysisCommand:
     
     def test_zone_analysis_with_show_shards(self, runner, mock_successful_connection):
         """Test zone-analysis with show-shards option"""
-        with patch('xmover.commands.diagnostics.ShardAnalyzer') as mock_analyzer:
+        with patch('xmover.analyzer.ShardAnalyzer') as mock_analyzer:
             mock_analyzer_instance = Mock()
             mock_analyzer.return_value = mock_analyzer_instance
             

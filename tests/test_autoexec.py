@@ -13,7 +13,8 @@ import pytest
 from unittest.mock import Mock, patch
 from click.testing import CliRunner
 
-from xmover.commands.maintenance import MaintenanceCommands, TableResetProcessor, TableResetState
+from xmover.commands.maintenance import MaintenanceCommands
+from xmover.commands.maintenance.problematic_translogs.autoexec import TableResetProcessor, TableResetState
 from xmover.database import CrateDBClient
 from xmover.cli import main
 
