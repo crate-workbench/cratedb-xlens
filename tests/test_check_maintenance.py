@@ -319,7 +319,7 @@ class TestMaintenanceCommandsClass:
         mock_client.execute_query.side_effect = Exception("No access")
         
         maintenance = MaintenanceCommands(mock_client)
-        settings = maintenance._get_cluster_recovery_settings()
+        settings = maintenance._node_maint._get_cluster_recovery_settings()
         
         assert settings['max_bytes_per_sec'] == 20 * 1024 * 1024  # 20MB
         assert settings['node_concurrent_recoveries'] == 2
@@ -332,7 +332,7 @@ class TestMaintenanceCommandsClass:
         }
         
         maintenance = MaintenanceCommands(mock_client)
-        settings = maintenance._get_cluster_recovery_settings()
+        settings = maintenance._node_maint._get_cluster_recovery_settings()
         
         assert settings['max_bytes_per_sec'] == 100 * 1024 * 1024  # 100MB
         assert settings['node_concurrent_recoveries'] == 4

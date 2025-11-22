@@ -243,7 +243,8 @@ class TestPercentageFilteringWithAdaptiveThresholds:
         ]
 
         # Test with 150% threshold
-        filtered = maintenance._filter_tables_by_percentage(tables_with_adaptive, 150)
+        filtered = maintenance._problematic.autoexec_handler._filter_tables_by_percentage(
+            tables_with_adaptive, 150, maintenance._problematic._get_current_replica_count)
 
         # Calculate expected percentages using adaptive thresholds:
         # large_config: 2048 / 1126.4 = 181.8% (should be included)
@@ -278,7 +279,7 @@ class TestPercentageFilteringWithAdaptiveThresholds:
             {'schema_name': 'analytics', 'table_name': 'metrics', 'partition_values': ''},
         ]
 
-        thresholds = maintenance._get_table_flush_thresholds(mock_shards)
+        thresholds = maintenance._problematic._get_table_flush_thresholds(mock_shards)
 
         # Verify thresholds were calculated with 10% buffer
         assert thresholds['doc.events']['config_mb'] == 1024.0
@@ -319,11 +320,12 @@ class TestMultipleTableProcessing:
         ]
 
         # Mock _filter_tables_by_percentage to return all tables
-        with patch.object(maintenance, '_filter_tables_by_percentage', return_value=tables):
-            result = maintenance._execute_autoexec(tables, False, 200, 720, "console")
+        with patch.object(maintenance._problematic.autoexec_handler, '_filter_tables_by_percentage', return_value=tables):
+            result = maintenance._problematic.autoexec_handler.execute_autoexec(
+                tables, False, 200, 720, "console", maintenance._problematic._get_current_replica_count)
 
         assert result is False
-        assert maintenance._get_autoexec_exit_code() == 3  # Partial failure
+        assert maintenance._problematic.autoexec_handler.get_autoexec_exit_code() == 3  # Partial failure
 
     @patch('cratedb_xlens.commands.maintenance.problematic_translogs.autoexec.TableResetProcessor')
     def test_complete_failure_returns_exit_code_2(self, mock_processor_class, mock_client):
@@ -341,21 +343,23 @@ class TestMultipleTableProcessing:
         ]
 
         # Mock _filter_tables_by_percentage to return all tables
-        with patch.object(maintenance, '_filter_tables_by_percentage', return_value=tables):
-            result = maintenance._execute_autoexec(tables, False, 200, 720, "console")
+        with patch.object(maintenance._problematic.autoexec_handler, '_filter_tables_by_percentage', return_value=tables):
+            result = maintenance._problematic.autoexec_handler.execute_autoexec(
+                tables, False, 200, 720, "console", maintenance._problematic._get_current_replica_count)
 
         assert result is False
-        assert maintenance._get_autoexec_exit_code() == 2  # Complete failure
+        assert maintenance._problematic.autoexec_handler.get_autoexec_exit_code() == 2  # Complete failure
 
     def test_no_tables_after_filtering_succeeds(self, mock_client):
         """Test that no tables to process (after filtering) is treated as success"""
         maintenance = MaintenanceCommands(mock_client)
 
         # Empty table list after filtering
-        result = maintenance._execute_autoexec([], False, 200, 720, "console")
+        result = maintenance._problematic.autoexec_handler.execute_autoexec(
+            [], False, 200, 720, "console", maintenance._problematic._get_current_replica_count)
 
         assert result is True
-        assert maintenance._get_autoexec_exit_code() == 0
+        assert maintenance._problematic.autoexec_handler.get_autoexec_exit_code() == 0
 
 
 # ============================================================================
