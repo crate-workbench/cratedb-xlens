@@ -1,6 +1,6 @@
 (read-check)=
 
-# CrateDB Cluster Data Readability Monitor
+# Cluster data readability monitor
 
 The `read-check` command is a professional monitoring tool that continuously checks cluster health by sampling data from the largest tables and partitions in your CrateDB cluster.
 
@@ -14,7 +14,7 @@ This command provides real-time insights into your cluster's data availability a
 - Monitoring query performance
 - Providing health status indicators
 
-## Basic Usage
+## Basic usage
 
 ```bash
 # Default monitoring (30s interval)
@@ -27,7 +27,7 @@ xmover read-check --seconds 10
 xmover read-check --seconds 60
 ```
 
-## Health Indicators
+## Health indicators
 
 The command uses separate indicators for write activity and query performance:
 
@@ -42,7 +42,7 @@ The command uses separate indicators for write activity and query performance:
 - ⚡ **Slow Query**: Individual queries taking >1000ms to complete
 - ⚠️ **Anomaly**: Unusual activity patterns detected
 
-## Sample Output
+## Sample output
 
 ```
 ╭─────────────────────────────────────────────────╮
@@ -60,29 +60,29 @@ Query Performance: ⚡ >1000ms • ⚠️ Anomaly
 Note: 🟡🔴 indicate write activity level, ⚡ indicates slow query performance
 ```
 
-## Key Features
+## Key features
 
-### Automatic Table Discovery
+### Automatic table discovery
 
 - Discovers largest 5 tables/partitions by size every 10 minutes
 - Handles both regular tables and partitioned tables seamlessly
 - Logs when table discovery changes
 
-### Optimized Query Performance
+### Optimized query performance
 
 - Uses efficient `max(_seq_no)` queries instead of sorting/LIMIT
 - Tracks actual database execution time (not network RTT)
 - Alerts on queries >1000ms with ⚡ indicator
 - Maintains rolling average of recent performance
 
-### Reliability Features
+### Reliability features
 
 - **Fresh connections** for each sample cycle
 - **Exponential backoff retry** on connection/query failures
 - **Graceful degradation** if individual tables become unavailable
 - **Comprehensive error tracking** and reporting
 
-### Statistics on Exit
+### Statistics on exit
 
 Press CTRL+C to see detailed monitoring statistics:
 
@@ -104,7 +104,7 @@ Press CTRL+C to see detailed monitoring statistics:
   - archive.events[date=2024-01-15]
 ```
 
-## Partition Support
+## Partition support
 
 The command automatically handles partitioned tables by:
 
@@ -119,9 +119,9 @@ Example with partitioned table:
 19:28:15.442 | INFO | 🟢 ACME.events[date=2024-01-15] // _seq_no +89 // total_docs +45 // 67ms
 ```
 
-## Use Cases
+## Use cases
 
-### Cluster Health Monitoring
+### Cluster health monitoring
 
 Run continuously to monitor overall cluster health and detect issues:
 
@@ -133,7 +133,7 @@ xmover read-check --seconds 60
 xmover read-check --seconds 10
 ```
 
-### Write Activity Analysis
+### Write activity analysis
 
 Identify which tables are most active and track write patterns:
 
@@ -141,7 +141,7 @@ Identify which tables are most active and track write patterns:
 - Track `total_docs` changes to see net document changes
 - Use performance metrics to identify database execution bottlenecks
 
-### Availability Testing
+### Availability testing
 
 Verify cluster data availability with fresh connections:
 
@@ -149,15 +149,15 @@ Verify cluster data availability with fresh connections:
 - Retry logic validates connection stability
 - Error tracking helps identify intermittent issues
 
-## Command Options
+## Command options
 
 | Option      | Default | Description                  |
 | ----------- | ------- | ---------------------------- |
 | `--seconds` | 30      | Sampling interval in seconds |
 
-## Technical Details
+## Technical details
 
-### Discovery Query
+### Discovery query
 
 The command uses an enhanced discovery query that joins system tables to get complete partition information:
 
@@ -177,7 +177,7 @@ ORDER BY size_gb DESC
 LIMIT 5
 ```
 
-### Sampling Query
+### Sampling query
 
 For each discovered table, the command uses an optimized query:
 
@@ -190,7 +190,7 @@ FROM "schema"."table"
 **Performance Measurement:**
 The command uses CrateDB's built-in query duration from the response metadata, avoiding network round-trip time contamination. This provides accurate database execution times rather than end-to-end response times.
 
-## Integration with Other Commands
+## Integration with other commands
 
 The `read-check` command complements other XLens monitoring tools:
 
@@ -198,7 +198,7 @@ The `read-check` command complements other XLens monitoring tools:
 - Combine with `active-shards --watch` to correlate write activity
 - Run alongside `large-translogs --watch` for comprehensive monitoring
 
-## Best Practices
+## Best practices
 
 1. **Production Monitoring**: Use 30-60 second intervals for continuous monitoring
 2. **Troubleshooting**: Use 10-15 second intervals for detailed investigation
