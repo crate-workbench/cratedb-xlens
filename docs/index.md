@@ -6,7 +6,7 @@ Welcome to the XLens documentation! XLens is a comprehensive utility for
 analyzing CrateDB clusters. It provides powerful commands for shard
 analysis, maintenance planning, and cluster optimization.
 
-## Getting Started
+## Getting started
 
 XLens is designed to help CrateDB administrators make informed decisions about cluster maintenance, shard distribution, and performance optimization.
 
@@ -19,7 +19,7 @@ cd xmover
 uv install
 ```
 
-### Basic Usage
+### Basic usage
 
 ```bash
 # Connect to your CrateDB cluster
@@ -30,9 +30,9 @@ export CRATEDB_PORT=4200
 xmover cluster-overview
 ```
 
-## Core Features
+## Core features
 
-### 🔧 Node Maintenance Planning
+### 🔧 Node maintenance planning
 
 Comprehensive analysis for safe node decommissioning and maintenance operations.
 
@@ -43,7 +43,7 @@ Comprehensive analysis for safe node decommissioning and maintenance operations.
 
 {ref}`Read the Node Maintenance Guide → <node-maintenance>`
 
-### 📊 Shard Distribution Analysis
+### 📊 Shard distribution analysis
 
 Deep insights into how data is distributed across your cluster.
 
@@ -52,7 +52,7 @@ Deep insights into how data is distributed across your cluster.
 - **Performance Impact**: Understand query performance implications
 - **Optimization Recommendations**: Get actionable suggestions
 
-### 🚨 Problematic Shard Detection
+### 🚨 Problematic shard detection
 
 Identify and resolve issues with shard allocation and recovery.
 
@@ -61,7 +61,7 @@ Identify and resolve issues with shard allocation and recovery.
 - **Command Generation**: Get SQL commands to fix issues
 - **Health Monitoring**: Ongoing cluster health assessment
 
-### 📈 Cluster Overview
+### 📈 Cluster overview
 
 High-level cluster health and capacity monitoring.
 
@@ -70,7 +70,7 @@ High-level cluster health and capacity monitoring.
 - **Node Status**: Individual node health and performance
 - **Trend Analysis**: Capacity and performance trends
 
-### 🔍 Data Readability Monitoring
+### 🔍 Data readability monitoring
 
 Continuous monitoring of cluster data availability and write activity.
 
@@ -81,9 +81,9 @@ Continuous monitoring of cluster data availability and write activity.
 
 [Read the Read-Check Guide →](read-check.md)
 
-## Quick Reference
+## Quick reference
 
-### Common Commands
+### Common commands
 
 ```bash
 # Check cluster health
@@ -99,7 +99,7 @@ xmover shard-distribution --detailed
 xmover problematic-translogs --threshold 100
 ```
 
-### Connection Options
+### Connection options
 
 ```bash
 # Using environment variables (recommended)
@@ -114,21 +114,21 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 
 ## Documentation
 
-### Detailed Guides
+### Detailed guides
 
 - **{ref}`Node Maintenance Guide <node-maintenance>`** - Complete guide to planning and executing node maintenance
 - **{ref}`Quick Reference <quick-reference>`** - Cheat sheet for common maintenance operations
 
-### Reference Materials
+### Reference materials
 
 - **Command Reference** - Detailed documentation for all commands
 - **Configuration Guide** - Setup and configuration options
 - **Troubleshooting** - Common issues and solutions
 - **Best Practices** - Recommended operational procedures
 
-## Key Concepts
+## Key concepts
 
-### Min-Availability Levels
+### Min-availability levels
 
 **Full Mode**
 
@@ -142,7 +142,7 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 - Use for: Software updates, temporary maintenance
 - Impact: Faster with minimal data movement
 
-### Capacity Constraints
+### Capacity constraints
 
 **Disk Space Watermarks**
 
@@ -156,20 +156,20 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 - Default: 1000 shards per node
 - Includes both primary and replica shards
 
-### Availability Zones
+### Availability zones
 
 - Shard movement respects zone boundaries
 - Master nodes excluded from shard placement
 - Cross-zone operations require special consideration
 
-## Status Indicators
+## Status indicators
 
-### Capacity Checks
+### Capacity checks
 
 - ✅ **Sufficient**: Maintenance can proceed safely
 - ❌ **Insufficient**: Capacity issues detected, see recommendations
 
-### Node Status
+### Node status
 
 - ✅ **Available**: Node can accept shards
 - ❌ **No space**: Disk watermark limits exceeded
@@ -177,9 +177,9 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 - ⚠️ **High usage**: Approaching capacity limits (>90%)
 - ❌ **At capacity**: Multiple constraints active
 
-## Safety Guidelines
+## Safety guidelines
 
-### Pre-Maintenance Checklist
+### Pre-maintenance checklist
 
 - [ ] Cluster health is GREEN
 - [ ] No ongoing shard recoveries
@@ -188,16 +188,16 @@ xmover --host cluster.example.com --port 4200 --user admin cluster-overview
 - [ ] Recovery time estimate acceptable
 - [ ] Backup procedures verified
 
-### Emergency Procedures
+### Emergency procedures
 
 - Monitor recovery progress during maintenance
 - Have rollback plans ready
 - Keep emergency contacts available
 - Document all actions taken
 
-## Performance Tuning
+## Performance tuning
 
-### Recovery Optimization
+### Recovery optimization
 
 ```sql
 -- Increase recovery bandwidth (if network supports)
@@ -207,7 +207,7 @@ ALTER CLUSTER SET "indices.recovery.max_bytes_per_sec" = '100mb';
 ALTER CLUSTER SET "cluster.routing.allocation.node_concurrent_recoveries" = 4;
 ```
 
-### Monitoring Commands
+### Monitoring commands
 
 ```sql
 -- Check cluster health
@@ -231,15 +231,15 @@ XLens integrates well with existing CrateDB monitoring and management tools:
 - **Alerting**: Integrate capacity checks with alerting systems
 - **Documentation**: Generate reports for compliance and audit
 
-## Support and Contributing
+## Support and contributing
 
-### Getting Help
+### Getting help
 
 - Check the troubleshooting guide for common issues
 - Review examples for similar scenarios
 - Consult the detailed documentation for specific commands
 
-### Best Practices
+### Best practices
 
 - Always test in non-production environments first
 - Schedule maintenance during low-traffic periods
@@ -254,15 +254,15 @@ XLens integrates well with existing CrateDB monitoring and management tools:
 - Submit documentation improvements
 - Share usage examples and case studies
 
-## Version Information
+## Version information
 
 This documentation covers XLens features and functionality. For the latest updates and release notes, check the project repository.
 
 ---
 
-**Quick Start**: Jump to the {ref}`quick-reference` for immediate help with common operations.
+**Quick Start**: Jump to the {ref}`quick reference <quick-reference>` for immediate help with common operations.
 
-**Deep Dive**: Read the {ref}`node-maintenance` for comprehensive understanding.
+**Deep Dive**: Read the {ref}`full document <node-maintenance>` for comprehensive understanding.
 
 
 :::{toctree}
