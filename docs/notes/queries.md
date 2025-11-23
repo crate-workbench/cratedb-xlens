@@ -1,4 +1,4 @@
-# Query expressions
+# Query gallery
 
 :::{div} sd-text-muted
 An SQL scratchpad.
