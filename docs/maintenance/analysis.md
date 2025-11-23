@@ -1,6 +1,6 @@
 (node-maintenance)=
 
-# CrateDB Node Maintenance Analysis
+# Node maintenance » Analysis
 
 The `check-maintenance` command provides comprehensive analysis of CrateDB node decommissioning scenarios, helping you understand the impact and requirements before taking a node offline for maintenance.
 
@@ -22,7 +22,7 @@ The `check-maintenance` command analyzes all these factors and provides actionab
 xmover check-maintenance --node <node-name> --min-availability <level>
 ```
 
-### Required Parameters
+### Required parameters
 
 - `--node`: The name of the node you want to analyze for maintenance
 - `--min-availability`: The minimum data availability level during maintenance
@@ -39,31 +39,31 @@ xmover check-maintenance --node data-hot-4 --min-availability full
 xmover check-maintenance --node data-hot-4 --min-availability primaries
 ```
 
-## Min-Availability Levels Explained
+## Min-Availability levels explained
 
-### Full Mode (`--min-availability full`)
+### Full mode (`--min-availability full`)
 
 - **What it does**: Analyzes moving ALL shards (primaries and replicas) off the target node
 - **When to use**: Complete node shutdown, hardware replacement, or when you want zero data on the node
 - **Impact**: Slower process but ensures the node can be completely powered down
 - **Data movement**: All shard data must be copied to other nodes
 
-### Primaries Mode (`--min-availability primaries`)
+### Primaries mode (`--min-availability primaries`)
 
 - **What it does**: Ensures all primary shards have replicas on other nodes
 - **When to use**: Software updates, restarts, temporary maintenance where the node will come back
 - **Impact**: Faster process, minimal data movement
 - **Data movement**: Only primary shards without replicas need to be moved
 
-#### Primaries Mode Operations:
+#### Primaries mode operations:
 - **Fast Operations**: Primary shards with existing replicas are demoted to replicas (metadata change only)
 - **Slow Operations**: Primary shards without replicas must have their data copied elsewhere
 
-## Output Sections
+## Output sections
 
-### 1. Maintenance Analysis Summary
+### 1. Maintenance analysis summary
 
-Provides high-level overview of the maintenance requirements:
+Provides a high-level overview of the maintenance requirements:
 
 ```
 ┌─────────────────────────────────────────┐
@@ -78,14 +78,14 @@ Provides high-level overview of the maintenance requirements:
 └─────────────────────────────────────────┘
 ```
 
-**Key Metrics:**
-- **Target Node**: Node being analyzed and its availability zone
-- **Total Shards**: Breakdown of primary vs replica shards
-- **Data to Move**: Total amount of data that needs to be relocated
-- **Available Capacity**: Free space on candidate nodes in the same zone
-- **Capacity Check**: Whether the cluster has sufficient space and shard slots
+**Key metrics:**
+- **Target node**: Node being analyzed and its availability zone
+- **Total shards**: Breakdown of primary vs replica shards
+- **Data to move**: Total amount of data that needs to be relocated
+- **Available capacity**: Free space on candidate nodes in the same zone
+- **Capacity check**: Whether the cluster has sufficient space and shard slots
 
-### 2. Shard Analysis by Type
+### 2. Shard analysis by type
 
 Breaks down what actions are required for different types of shards:
 
@@ -101,16 +101,16 @@ Breaks down what actions are required for different types of shards:
 └─────────────────────────────┴─────────┴─────────────┴───────────────┘
 ```
 
-**For Full Mode:**
+**For "full" mode:**
 - All shard types show "Move data" as the action
 - Shows the impact scope of the maintenance
 
-**For Primaries Mode:**
+**For "primaries" mode:**
 - "Convert to replica (fast)" for primaries with existing replicas
 - "Move data (slow)" for primaries without replicas  
 - "No action needed" for replica shards
 
-### 3. Target Nodes Capacity
+### 3. Target nodes capacity
 
 Shows which nodes in the same availability zone can accept the relocated shards:
 
@@ -140,7 +140,7 @@ Shows which nodes in the same availability zone can accept the relocated shards:
 - `⚠️ High usage`: Node is approaching capacity limits (>90% disk usage)
 - `❌ At capacity`: Node has multiple capacity constraints
 
-### 4. Recovery Time Estimation
+### 4. Recovery time estimation
 
 Provides estimates for how long the maintenance process will take:
 
@@ -167,11 +167,11 @@ Provides estimates for how long the maintenance process will take:
 - Considers concurrent recovery streams (`cluster.routing.allocation.node_concurrent_recoveries`)
 - Provides realistic estimates for data movement duration
 
-### 5. Next Steps and Recommendations
+### 5. Next steps and recommendations
 
 Provides actionable recommendations based on the analysis:
 
-#### When Maintenance is Safe:
+#### When maintenance is safe:
 
 ```
 📋 Next Steps:
@@ -199,7 +199,7 @@ Recommended maintenance procedure:
    ALTER CLUSTER SET "cluster.routing.allocation.enable" = 'all';
 ```
 
-#### When Issues are Detected:
+#### When issues are detected:
 
 ```
 📋 Next Steps:
@@ -223,7 +223,7 @@ Recommendations:
    - Optimize shard allocation settings
 ```
 
-#### Shard Capacity Issues:
+#### Shard capacity issues:
 
 When nodes are approaching or have hit the `max_shards_per_node` limit:
 
@@ -245,9 +245,9 @@ Shard Capacity Solutions:
    xmover shard-distribution --detailed
 ```
 
-## Understanding Capacity Constraints
+## Understanding capacity constraints
 
-### Disk Space Constraints
+### Disk space constraints
 
 The analysis considers CrateDB's disk watermark settings:
 
@@ -255,7 +255,7 @@ The analysis considers CrateDB's disk watermark settings:
 - **High Watermark (default 90%)**: Shards relocated away from nodes above this threshold  
 - **Flood Stage (default 95%)**: All allocations to the node are blocked
 
-### Shard Count Constraints
+### Shard count constraints
 
 CrateDB limits the number of shards per node via `cluster.max_shards_per_node` (default: 1000):
 
@@ -263,7 +263,7 @@ CrateDB limits the number of shards per node via `cluster.max_shards_per_node` (
 - Each shard has memory and file handle overhead
 - The limit applies to both primary and replica shards
 
-### Availability Zone Constraints
+### Availability zone constraints
 
 Shard relocation only considers nodes in the same availability zone:
 
@@ -271,9 +271,9 @@ Shard relocation only considers nodes in the same availability zone:
 - Respects rack awareness and failure domain isolation
 - Master nodes are automatically excluded as shard targets
 
-## Best Practices
+## Best practices
 
-### Before Running Maintenance
+### Before running maintenance
 
 1. **Check Cluster Health**: Ensure cluster status is GREEN
    ```bash
@@ -289,7 +289,7 @@ Shard relocation only considers nodes in the same availability zone:
 
 3. **Monitor Cluster Load**: Ensure low I/O and query load during maintenance
 
-### Choosing Min-Availability Level
+### Choosing min-availability level
 
 **Use `full` when:**
 - Complete hardware replacement
@@ -303,14 +303,14 @@ Shard relocation only considers nodes in the same availability zone:
 - Need to minimize data movement
 - Node will return to service quickly
 
-### Timing Considerations
+### Timing considerations
 
 - **Plan for Recovery Time**: Data movement takes time, especially for large datasets
 - **Maintenance Windows**: Schedule during low-traffic periods
 - **Network Impact**: Large data transfers can impact cluster performance
 - **Cascading Effects**: Moving shards may trigger additional rebalancing
 
-## Troubleshooting Common Issues
+## Troubleshooting common issues
 
 ### "No candidate nodes found in same availability zone"
 
@@ -339,7 +339,7 @@ Shard relocation only considers nodes in the same availability zone:
 - Add storage capacity to existing nodes
 - Add more nodes to the cluster
 
-### High Recovery Time Estimates
+### High recovery time estimates
 
 **Cause**: Large amounts of data to transfer with limited bandwidth.
 
@@ -349,7 +349,7 @@ Shard relocation only considers nodes in the same availability zone:
 - Schedule maintenance during low-traffic periods
 - Consider using `primaries` mode instead of `full`
 
-## Integration with Other Commands
+## Integration with other commands
 
 The maintenance analysis works well with other `xmover` commands:
 
@@ -364,9 +364,9 @@ xmover problematic-translogs --threshold 100
 xmover cluster-overview
 ```
 
-## Advanced Configuration
+## Advanced configuration
 
-### Recovery Performance Tuning
+### Recovery performance tuning
 
 Before maintenance, you might want to adjust recovery settings:
 
@@ -382,7 +382,7 @@ ALTER CLUSTER SET "indices.recovery.max_bytes_per_sec" = '20mb';
 ALTER CLUSTER SET "cluster.routing.allocation.node_concurrent_recoveries" = 2;
 ```
 
-### Watermark Adjustments
+### Watermark adjustments
 
 For clusters with predictable space usage:
 
@@ -393,23 +393,23 @@ ALTER CLUSTER SET "cluster.routing.allocation.disk.watermark.high" = '85%';
 ALTER CLUSTER SET "cluster.routing.allocation.disk.watermark.flood_stage" = '90%';
 ```
 
-## Limitations and Considerations
+## Limitations and considerations
 
-### Current Limitations
+### Current limitations
 
 - Analysis is point-in-time (cluster state may change)
 - Estimates assume steady-state performance (actual times may vary)
 - Does not account for ongoing application queries during recovery
 - Cross-zone analysis not currently supported
 
-### Important Considerations
+### Important considerations
 
 - **Network Bandwidth**: Large data transfers can impact application performance
 - **Cluster Load**: Recovery competes with normal query processing
 - **Cascading Effects**: Moving shards may trigger additional rebalancing across the cluster
 - **Application Impact**: Some applications may experience higher latency during recovery
 
-### Future Enhancements
+### Future enhancements
 
 Planned improvements include:
 - Real-time progress monitoring during maintenance
@@ -418,8 +418,8 @@ Planned improvements include:
 - Automated maintenance orchestration
 - Historical performance analysis for better time estimates
 
-## Related Documentation
+## Related documentation
 
-- [CrateDB Cluster Administration](https://crate.io/docs/crate/reference/en/latest/admin/)
-- [Shard Allocation Settings](https://crate.io/docs/crate/reference/en/latest/admin/system-information.html#cluster-settings)
-- [Recovery and Replication](https://crate.io/docs/crate/reference/en/latest/concepts/clustering.html)
+- [CrateDB cluster administration](https://crate.io/docs/crate/reference/en/latest/admin/)
+- [Shard allocation settings](https://crate.io/docs/crate/reference/en/latest/admin/system-information.html#cluster-settings)
+- [Recovery and replication](https://crate.io/docs/crate/reference/en/latest/concepts/clustering.html)

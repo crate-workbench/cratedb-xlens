@@ -269,8 +269,7 @@ This documentation covers XLens features and functionality. For the latest updat
 :caption: Handbook
 :maxdepth: 1
 :hidden:
-Quick reference <maintenance-quick-reference>
-Node maintenance <node-maintenance>
+Node maintenance <maintenance/index>
 Data readability monitor <read-check>
 :::
 :::{toctree}
