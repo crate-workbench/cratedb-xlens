@@ -269,6 +269,8 @@ This documentation covers XLens features and functionality. For the latest updat
 :caption: Install
 :maxdepth: 1
 :hidden:
+Standalone <install/package>
+Container <install/container>
 Kubernetes <install/kubernetes>
 :::
 :::{toctree}
