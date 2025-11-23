@@ -278,5 +278,6 @@ Data readability monitor <read-check>
 :hidden:
 Sandbox <sandbox>
 Changelog <changes>
+oci
 Notes <notes/index>
 :::
