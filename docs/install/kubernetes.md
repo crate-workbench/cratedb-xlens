@@ -1,4 +1,4 @@
-# XMover Deployment Guide
+# Install on Kubernetes
 
 This directory contains Docker and Kubernetes deployment configurations for XMover.
 
