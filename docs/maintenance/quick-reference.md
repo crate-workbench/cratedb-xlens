@@ -1,8 +1,8 @@
 (quick-reference)=
 
-# CrateDB Node Maintenance Quick Reference
+# Node maintenance » Quick reference
 
-## Command Syntax
+## Command syntax
 
 ```bash
 xmover check-maintenance --node <node-name> --min-availability <level>
@@ -15,14 +15,14 @@ xmover check-maintenance --node <node-name> --min-availability <level>
 | `--node` | Yes | Node name | Target node to analyze for maintenance |
 | `--min-availability` | Yes | `full` \| `primaries` | Minimum data availability level |
 
-## Min-Availability Levels
+## Min-availability levels
 
 | Level | Data Movement | Speed | Use Case |
 |-------|--------------|-------|----------|
 | `full` | All shards (primaries + replicas) | Slower | Hardware replacement, permanent removal |
 | `primaries` | Only primaries without replicas | Faster | Software updates, temporary maintenance |
 
-## Quick Commands
+## Quick commands
 
 ```bash
 # Full maintenance analysis
@@ -32,20 +32,20 @@ xmover check-maintenance --node data-hot-4 --min-availability full
 xmover check-maintenance --node data-hot-4 --min-availability primaries
 ```
 
-## Status Indicators
+## Status indicators
 
-### Capacity Check (Summary)
+### Capacity check (summary)
 - `✅ Sufficient` - Maintenance can proceed safely
 - `❌ Insufficient` - Not enough capacity, see recommendations
 
-### Node Status (Target Nodes Table)
+### Node status (target nodes table)
 - `✅ Available` - Node can accept shards
 - `❌ No space` - Node at disk watermark limit
 - `❌ Max shards` - Node at max_shards_per_node limit
 - `⚠️ High usage` - Node approaching limits (>90% disk)
 - `❌ At capacity` - Multiple constraints active
 
-## Pre-Maintenance Checklist
+## Pre-maintenance checklist
 
 - [ ] Cluster health is GREEN
 - [ ] No ongoing shard recoveries
@@ -53,7 +53,7 @@ xmover check-maintenance --node data-hot-4 --min-availability primaries
 - [ ] Maintenance window scheduled
 - [ ] Recovery time estimate acceptable
 
-## Common Issues & Solutions
+## Common issues & solutions
 
 ### Issue: "No candidate nodes found"
 **Solution**: Add nodes to same availability zone or free up space
@@ -81,7 +81,7 @@ ALTER CLUSTER SET "indices.recovery.max_bytes_per_sec" = '100mb';
 ALTER CLUSTER SET "cluster.routing.allocation.node_concurrent_recoveries" = 4;
 ```
 
-## Monitoring Commands
+## Monitoring commands
 
 ```bash
 # Check cluster health
@@ -96,23 +96,23 @@ FROM sys.shards
 WHERE routing_state IN ('RELOCATING', 'INITIALIZING');
 ```
 
-## Performance Tuning
+## Performance tuning
 
-### Before Maintenance
+### Before maintenance
 ```sql
 -- Increase recovery performance (if network supports)
 ALTER CLUSTER SET "indices.recovery.max_bytes_per_sec" = '100mb';
 ALTER CLUSTER SET "cluster.routing.allocation.node_concurrent_recoveries" = 4;
 ```
 
-### After Maintenance
+### After maintenance
 ```sql
 -- Restore defaults
 ALTER CLUSTER SET "indices.recovery.max_bytes_per_sec" = '20mb';
 ALTER CLUSTER SET "cluster.routing.allocation.node_concurrent_recoveries" = 2;
 ```
 
-## Integration with Other Commands
+## Integration with other commands
 
 ```bash
 # Detailed shard analysis before maintenance
@@ -125,7 +125,7 @@ xmover problematic-translogs --threshold 100
 xmover test-connection --verbose
 ```
 
-## Emergency Recovery
+## Emergency recovery
 
 If maintenance goes wrong:
 
