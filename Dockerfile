@@ -1,5 +1,5 @@
 # Multi-stage build for minimal production image
-FROM docker.io/python:3.12-slim-bookworm AS builder
+FROM docker.io/python:3.14-slim-bookworm AS builder
 
 # Configure build environment.
 ENV PIP_ROOT_USER_ACTION=ignore
@@ -26,7 +26,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 RUN uv sync --no-dev --no-install-project
 
 # Production stage
-FROM docker.io/python:3.12-slim-bookworm
+FROM docker.io/python:3.14-slim-bookworm
 
 # Configure build environment.
 ENV PIP_ROOT_USER_ACTION=ignore
