@@ -16,7 +16,7 @@ dependencies = [
     "python-dotenv<2",
     "rich<15",
     "pyyaml<7",
-    "loguru>=0.7,<1",
+    "loguru>=0.7.3,<1",
 ]
 keywords = [
     "cratedb",
